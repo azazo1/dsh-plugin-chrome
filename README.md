@@ -22,7 +22,7 @@
 
 ```sh
 # 方式一：从 GitHub 安装（推荐）
-npx -p @deepseek-ai/dsh dsh plugin --profile web add github:jiaerer/dsh-plugin-chrome
+npx -p @deepseek-ai/dsh dsh plugin --profile web add github:jiaererw/dsh-plugin-chrome
 
 # 方式二：本地路径（开发调试）
 npx -p @deepseek-ai/dsh dsh plugin --profile web add D:/harness/dsh-plugin-chrome
