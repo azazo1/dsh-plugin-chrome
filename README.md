@@ -1,102 +1,104 @@
 # dsh-plugin-chrome
 
-> DeepSeek Harness 浏览器可视化插件：为每个会话打开一个**真实可见的 Chrome 窗口**，Agent 通过 `chrome_*` 工具集操作浏览器，你在 Web GUI 的「Chrome」标签页里**实时观看画面流**，随时可以手动接管。
+> A DeepSeek Harness browser visualization plugin: opens a **real, visible Chrome window** per session, lets the agent drive the browser through the `chrome_*` tool suite, and streams the **live view** into a Chrome tab in the Web GUI — take over manually at any time.
 
 | | |
 |---|---|
 | ![browsing](assets/screenshot-1-bing.jpg) | ![douyin](assets/screenshot-2-douyin.jpg) |
 
-## 特性
+[中文文档](README.zh.md)
 
-- **独立可见窗口**：每个 DSH 会话拥有一个独立 Chrome 窗口（真实窗口、非 headless），用户在旁边就能看到 Agent 的每一步操作；窗口使用隔离的 user-data-dir，与你的日常浏览器互不干扰。
-- **实时画面流**：Web GUI「Chrome」标签页通过 Chrome screencast 实时显示页面画面（秒级帧率），无需反复截图。
-- **完整的 Agent 工具集**（16 个工具）：`chrome_open` / `chrome_status` / `chrome_close` / `chrome_navigate` / `chrome_tabs` / `chrome_snapshot` / `chrome_screenshot` / `chrome_click` / `chrome_click_at` / `chrome_fill` / `chrome_type` / `chrome_press_key` / `chrome_hover` / `chrome_scroll` / `chrome_evaluate` / `chrome_wait`。
-- **无障碍树快照**：`chrome_snapshot` 输出紧凑的 a11y 树 + 稳定元素 uid，点击/填充直接按 uid 定位，比裸 DOM 省 token、抗脆弱选择器。
-- **截图双通道**：`chrome_screenshot` 的图片既进模型上下文（图片块），也保存到会话截图目录并展示在面板里。
-- **安全设计**：CDP 不暴露固定端口；Web API 同源校验 + sessionId 白名单；浏览器数据按会话隔离。
-- **资源治理**：空闲自动关闭（默认 10 分钟，可配置），`chrome_close` 显式关闭，插件卸载/宿主退出时全部收尾。
+## Features
 
-## 安装
+- **A visible window per session**: every DSH session gets its own Chrome window (real window, not headless). Watch every agent action as it happens; the window uses an isolated user-data-dir, so it never mixes with your daily browser.
+- **Live view**: the Chrome tab in the Web GUI streams the window through Chrome screencast (smooth while pages are active). A screenshot heartbeat keeps idle pages from freezing (about one frame every 3 seconds).
+- **Complete agent tool suite** (16 tools): `chrome_open` / `chrome_status` / `chrome_close` / `chrome_navigate` / `chrome_tabs` / `chrome_snapshot` / `chrome_screenshot` / `chrome_click` / `chrome_click_at` / `chrome_fill` / `chrome_type` / `chrome_press_key` / `chrome_hover` / `chrome_scroll` / `chrome_evaluate` / `chrome_wait`.
+- **Accessibility-tree snapshots**: `chrome_snapshot` returns a compact a11y tree with stable element uids; clicks and fills target uids directly — far lighter than DOM dumps and robust against fragile selectors.
+- **Dual-channel screenshots**: `chrome_screenshot` sends the image into the model context (as an image block) AND saves it to the session's screenshot history shown in the panel.
+- **Security-minded**: CDP never exposes a fixed port; the Web API enforces same-origin checks and a sessionId whitelist; browser data is isolated per session.
+- **Resource governance**: idle windows auto-close (default 10 min, configurable), `chrome_close` closes explicitly, and plugin unload / host shutdown closes every window it opened.
 
-> 前置：已安装 DeepSeek Harness（DSH），本机装有 Chrome 或 Edge。
+## Install
+
+> Prerequisites: DeepSeek Harness (DSH) installed, and Chrome or Edge on the machine.
 
 ```sh
-# 方式一：从 GitHub 安装（推荐）
+# Option 1: install from GitHub (recommended)
 npx -p @deepseek-ai/dsh dsh plugin --profile web add github:jiaererw/dsh-plugin-chrome
 
-# 方式二：本地路径（开发调试）
+# Option 2: local path (development)
 npx -p @deepseek-ai/dsh dsh plugin --profile web add D:/harness/dsh-plugin-chrome
 ```
 
-安装后**重启 DSH**，Web GUI 的会话顶部会出现「Chrome」标签页。
+Restart DSH after installing — a **Chrome** tab appears at the top of every conversation.
 
-## 使用
+## Usage
 
-### 给 Agent 用（工具）
+### For the agent (tools)
 
-安装后 Agent 自动获得 `chrome_*` 工具集。直接对 Agent 说：
+The agent gets the `chrome_*` suite automatically. Just ask it:
 
-> 打开 Chrome，访问 https://example.com，截个图，然后点页面里的「登录」按钮并填写用户名。
+> Open Chrome, go to https://example.com, take a screenshot, then click the "Login" button and fill in the username.
 
-Agent 会：`chrome_open` → `chrome_navigate` → `chrome_screenshot`（看图）→ `chrome_snapshot`（拿 uid）→ `chrome_click` / `chrome_fill`。
+The agent will: `chrome_open` → `chrome_navigate` → `chrome_screenshot` (sees the image) → `chrome_snapshot` (gets uids) → `chrome_click` / `chrome_fill`.
 
-### 给你看（可视化）
+### For you (visualization)
 
-1. 打开会话顶部的「Chrome」标签页：
-   - **实时画面**：Live 视图持续显示 Chrome 窗口画面。页面有活动时走 Chrome 原生 screencast 帧流（秒级流畅）；页面静止时由心跳兜底强制截帧（约 3 秒一帧），画面不会冻结。
-   - **标签页管理**：右侧列表切换/关闭标签页，与窗口同步。
-   - **手动接管**：你随时可以在 Chrome 窗口里自己点几下——Agent 的下一次工具调用会看到你的改动。
-2. **截图历史**：每次 `chrome_screenshot` 的产物都在「截图历史」里，点击缩略图放大。
+1. Open the **Chrome** tab at the top of the conversation:
+   - **Live view**: continuously shows the window. Native screencast frames flow while the page changes; a heartbeat fallback force-captures idle pages so the picture never freezes.
+   - **Tab management**: switch or close tabs from the side list, in sync with the real window.
+   - **Manual takeover**: click around in the Chrome window yourself at any time — the agent sees your changes on its next tool call.
+2. **Screenshot history**: every `chrome_screenshot` is stored in the panel; click a thumbnail to enlarge.
 
-### 窗口生命周期与容错
+### Window lifecycle & resilience
 
-- **惰性启动**：首次调用任意 `chrome_*` 工具（或点击面板「打开窗口」）时才拉起 Chrome。
-- **接管遗留实例**：若 DSH 进程异常退出留下了孤儿 Chrome（profile 被锁），插件下次启动会通过 `DevToolsActivePort` 自动连接并接管该窗口（借鉴 chrome-devtools-mcp 的 autoConnect 机制），而不是报错。
-- **空闲回收**：窗口空闲超过 `idleTimeoutMs`（默认 10 分钟）自动关闭；有 Web UI 观看实时画面时不回收。
-- **无可用标签页时自动补页**：所有操作都会先确保存在一个可用的普通标签页，避免「窗口开着但全是 chrome:// 内部页」时的死锁。
+- **Lazy start**: Chrome launches only on the first `chrome_*` call (or the panel's Open button).
+- **Orphan adoption**: if DSH died and left a Chrome behind (profile locked), the plugin reconnects through `DevToolsActivePort` and takes the window over instead of failing (the same autoConnect idea as chrome-devtools-mcp).
+- **Idle reaping**: a window idle past `idleTimeoutMs` (default 10 min) closes automatically — never while a Web UI viewer is watching.
+- **Auto tab recovery**: every operation makes sure a usable tab exists, so a window full of `chrome://` internal pages never dead-ends.
 
-## 配置
+## Configuration
 
-在 profile 的 `cordis.patch.yml` 中覆盖插件行配置（整段 config 替换）：
+Override the plugin row in the profile's `cordis.patch.yml` (config is replaced wholesale):
 
 ```yaml
 - id: dsh-plugin-chrome
   config:
-    headless: false            # 保持 false：可见窗口是本插件的核心
-    executablePath: ''         # 留空自动探测 Chrome/Edge；也可指定绝对路径
-    idleTimeoutMs: 600000      # 空闲自动关闭（0=禁用）
+    headless: false            # keep false — a visible window is the point
+    executablePath: ''         # empty auto-detects Chrome/Edge; or set an absolute path
+    idleTimeoutMs: 600000      # idle auto-close (0 disables)
     windowWidth: 1280
     windowHeight: 900
-    screencastFrameSkip: 4     # 实时画面抽帧（1=最流畅）
-    screencastQuality: 70      # JPEG 质量 1-100
-    maxSnapshotText: 60000     # 单次快照最大字符数
+    screencastFrameSkip: 4     # live-view frame decimation (1 = smoothest)
+    screencastQuality: 70      # JPEG quality 1-100
+    maxSnapshotText: 60000     # max chars per snapshot
     maxTabs: 16
-    autoScreenshot: false      # 每次操作后自动截图
-    extraArgs: ''              # 追加的 Chrome 启动参数
+    autoScreenshot: false      # capture after every action
+    extraArgs: ''              # extra Chrome launch flags
 ```
 
-数据目录（浏览器配置与截图）：`~/.dsh/data/dsh-plugin-chrome/sessions/<sessionId>/`（可用 `dataRoot` 覆盖）。
+Data directory (browser profiles & screenshots): `~/.dsh/data/dsh-plugin-chrome/sessions/<sessionId>/` (override with `dataRoot`).
 
-## 常见问题
+## FAQ
 
-- **点开 Chrome 标签页没画面**：确认窗口已运行（面板顶部状态点）；首次打开可能需数秒启动 Chrome。静止页面约 3 秒一帧（心跳兜底），有内容变化时帧率自动提升。
-- **Agent 报"未知元素 uid"**：页面已变化，让它重新 `chrome_snapshot`。
-- **窗口被我自己关了**：面板状态会显示"窗口未打开"，下次任意 `chrome_*` 工具调用或点击「打开窗口」即可重启。
-- **登录态问题**：每个会话的浏览器是独立 profile，登录态不复用日常浏览器；这是隔离设计，如需登录某网站请让 Agent 完成一次登录（session 期间保持）。
-- **杀 DSH 后 Chrome 还开着**：孤儿窗口会在下次会话调用时被自动接管，或手动关闭即可；正常关闭 DSH（插件卸载）会连带关闭窗口。
+- **The Chrome tab shows nothing**: check the window is running (status dot at the top); the first launch takes a few seconds. Idle pages update roughly every 3 seconds via the heartbeat; activity raises the frame rate automatically.
+- **Agent says "unknown uid"**: the page changed — have it re-run `chrome_snapshot`.
+- **I closed the window myself**: the panel shows "window closed"; any next `chrome_*` call or the Open button relaunches it.
+- **Login state**: each session uses an isolated profile, so logins don't carry over from your daily browser — that's by design. To log in somewhere, let the agent complete the login (it persists for the session).
+- **Chrome stays open after DSH is killed**: the orphan window is adopted on the next session call (or close it by hand); a clean DSH shutdown closes its windows.
 
-## 开发
+## Development
 
 ```sh
 npm install
-npm run typecheck   # host + client 两个 program
-npm test            # vitest 单测
-npm run test:e2e    # 真实 Chrome 端到端冒烟（会弹出可见窗口）
-npm run build       # lib/index.js（host）+ lib/client.js（client bundle）
-npm run watch       # 开发时持续构建；client 变更经 HMR 热更，host 变更需重启 DSH
+npm run typecheck   # host + client programs
+npm test            # vitest unit tests
+npm run test:e2e    # real-Chrome end-to-end smoke (pops a visible window)
+npm run build       # lib/index.js (host) + lib/client.js (client bundle)
+npm run watch       # continuous build; client changes hot-reload, host changes need a DSH restart
 ```
 
-架构：host 半（cordis 插件）用 puppeteer-core 驱动本机 Chrome，注册 `chrome_*` 工具与 `/dsh-chrome/*` HTTP/WS API；client 半（浏览器 bundle）注册 `conversation.view` 的「Chrome」标签页，消费 API 与帧流。画面流 = Chrome 原生 screencast（活动页）+ 截图心跳（静止页兜底）。控制层借鉴 [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp)（CDP 控制、a11y 快照+uid 反查、等待机制、autoConnect 接管）与 [mcp-chrome](https://github.com/hangwin/mcp-chrome)（截图压缩、CDP 坐标输入、会话引用计数）的成熟设计。
+Architecture: the host half (cordis plugin) drives the local Chrome through puppeteer-core, registers the `chrome_*` tools and the `/dsh-chrome/*` HTTP/WS API; the client half (browser bundle) registers the Chrome tab on `conversation.view` and consumes the API and the frame stream. The picture = native Chrome screencast (active pages) + screenshot heartbeat (idle fallback). The control layer borrows proven designs from [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp) (CDP control, a11y snapshots with uid lookup, wait discipline, autoConnect adoption) and [mcp-chrome](https://github.com/hangwin/mcp-chrome) (screenshot compression, CDP coordinate input, session refcounting).
 
 ## License
 
