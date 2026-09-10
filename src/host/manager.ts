@@ -216,6 +216,18 @@ export class SessionChrome {
     return this.busyCount > 0
   }
 
+  /**
+   * Whether this window can still serve operations: we have not closed it,
+   * it has not exited, and puppeteer still holds a live connection.
+   *
+   * A user closing the window by hand (or the process dying) flips this to
+   * false while the manager may still be holding the instance, so the
+   * manager consults this before reusing a mapped session.
+   */
+  isAlive(): boolean {
+    return !this.closed && !this.exited && this.browser.connected
+  }
+
   /** Live status snapshot for the Web UI and tools. */
   async status(): Promise<ChromeStatus> {
     const pages: PageInfo[] = []
@@ -392,6 +404,13 @@ export class SessionChrome {
   }
 }
 
+/**
+ * Produces one raw Chrome instance for a session. The production value
+ * discovers the user's browser and launches it; tests substitute a fake so
+ * window-lifecycle policy is exercised without spawning Chrome.
+ */
+export type LaunchChrome = (sessionId: string) => Promise<{ browser: Browser; adopted: boolean }>
+
 /** Manager owning every session window and the shared launch policy. */
 export class ChromeManager {
   private sessions = new Map<string, SessionChrome>()
@@ -399,8 +418,11 @@ export class ChromeManager {
   private launching = new Map<string, Promise<SessionChrome>>()
   private executable: { path: string; name: string } | null = null
   private readonly idleTimer: ReturnType<typeof setInterval>
+  /** The launch path in force (production launch, or an injected test seam). */
+  private readonly launchChrome: LaunchChrome
 
-  constructor(readonly config: ResolvedConfig, private readonly dataRoot: string) {
+  constructor(readonly config: ResolvedConfig, private readonly dataRoot: string, launchChrome?: LaunchChrome) {
+    this.launchChrome = launchChrome ?? ((sessionId: string) => this.launchChromeReal(sessionId))
     // Reap idle windows every 30 seconds.
     this.idleTimer = setInterval(() => this.reapIdle(), 30000)
     this.idleTimer.unref?.()
@@ -412,17 +434,40 @@ export class ChromeManager {
     return this.executable
   }
 
+  /** Default launcher: discover the user's browser and start one instance. */
+  private async launchChromeReal(sessionId: string): Promise<{ browser: Browser; adopted: boolean }> {
+    const exec = this.resolveExecutable()
+    const profileDir = join(this.dataRoot, SESSIONS_DIR, sessionId, 'profile')
+    return launchBrowser(exec.path, launchOptions(profileDir, {
+      headless: this.config.headless,
+      windowWidth: this.config.windowWidth,
+      windowHeight: this.config.windowHeight,
+      extraArgs: this.config.extraArgs,
+    }))
+  }
+
   /** Get a live session window, or undefined. */
   get(sessionId: string): SessionChrome | undefined {
     return this.sessions.get(sessionId)
   }
 
-  /** Get or launch the session window (single-flight per session). */
+  /**
+   * Get or launch the session window (single-flight per session).
+   *
+   * A mapped window that is no longer alive is dropped rather than returned:
+   * the user may close the window by hand at any time, which leaves a dead
+   * instance in the map, and handing that back would fail every later
+   * operation with a raw "browser disconnected" error. The next call after a
+   * manual close therefore transparently reopens the window.
+   */
   async getOrLaunch(sessionId: string, url?: string): Promise<SessionChrome> {
     const existing = this.sessions.get(sessionId)
     if (existing !== undefined) {
-      existing.touch()
-      return existing
+      if (existing.isAlive()) {
+        existing.touch()
+        return existing
+      }
+      this.sessions.delete(sessionId)
     }
     const inFlight = this.launching.get(sessionId)
     if (inFlight !== undefined) return inFlight
@@ -435,14 +480,7 @@ export class ChromeManager {
 
   /** Launch body (owns failure cleanup). */
   private async doLaunch(sessionId: string, url?: string): Promise<SessionChrome> {
-    const exec = this.resolveExecutable()
-    const profileDir = join(this.dataRoot, SESSIONS_DIR, sessionId, 'profile')
-    const { browser, adopted } = await launchBrowser(exec.path, launchOptions(profileDir, {
-      headless: this.config.headless,
-      windowWidth: this.config.windowWidth,
-      windowHeight: this.config.windowHeight,
-      extraArgs: this.config.extraArgs,
-    }))
+    const { browser, adopted } = await this.launchChrome(sessionId)
     const session = new SessionChrome(sessionId, browser, this.dataRoot, this.config, adopted)
     this.sessions.set(sessionId, session)
     try {

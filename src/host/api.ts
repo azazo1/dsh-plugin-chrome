@@ -133,6 +133,12 @@ export function installApi(webCtx: Context, manager: ChromeManager): () => void 
 
   const wire = (session: SessionChrome): void => {
     if (wired.has(session)) return
+    // A window the user closed stays in the manager's map until the next call
+    // revives it as a fresh SessionChrome. Drop the dead instances' wiring so
+    // close/reopen cycles do not accumulate them (and the browsers they hold).
+    for (const stale of wired) {
+      if (stale !== session && !stale.isAlive()) wired.delete(stale)
+    }
     wired.add(session)
     session.onFrame = (frame) => {
       const sockets = viewers.get(session.sessionId)
