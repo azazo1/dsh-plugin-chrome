@@ -16,7 +16,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { WebSocketServer, WebSocket } from 'ws'
-import type { ClientWsMessage, ChromeEventDetail, HostWsMessage } from '../shared/contract.ts'
+import type { ChromeStatus, ClientWsMessage, ChromeEventDetail, HostWsMessage } from '../shared/contract.ts'
 import { API_PREFIX, WS_PATH } from '../shared/contract.ts'
 import type { ChromeManager, SessionChrome } from './manager.ts'
 import { NAV_TIMEOUT_MS, normalizeUrl } from './actions.ts'
@@ -99,12 +99,53 @@ function requireSessionId(value: unknown, label: string): string {
   return value
 }
 
+/** Status of a session that has no Chrome window yet. */
+function stoppedStatus(sessionId: string): ChromeStatus {
+  return {
+    sessionId, running: false, pages: [], startedAt: null, lastUsedAt: null,
+    idleDeadline: null, lastScreenshot: null, screencastActive: false, error: null,
+  }
+}
+
 /** Install the HTTP routes and the screencast WebSocket. */
 export function installApi(webCtx: Context, manager: ChromeManager): () => void {
   /** Live viewer sockets per session (screencast + status fan-out). */
   const viewers = new Map<string, Set<WebSocket>>()
+  /** One screencast token per viewer socket (identity for add/remove). */
+  const viewerTokens = new Map<WebSocket, object>()
+  /** Session instance each viewer is currently streaming from. */
+  const viewerSessions = new Map<WebSocket, SessionChrome>()
   /** Sessions whose pushers are wired to the fan-out below. */
   const wired = new Set<SessionChrome>()
+
+  /**
+   * Point one viewer socket at a session's frame stream.
+   *
+   * Viewers are strictly observers: they attach to a window that already
+   * exists and NEVER launch one — opening the Chrome tab in the Web GUI must
+   * not start a browser on its own. When the window is replaced (manual
+   * close, chrome_open, chrome_close), the viewer migrates from the old
+   * instance to the new one here.
+   */
+  const attachViewer = (socket: WebSocket, session: SessionChrome): void => {
+    const token = viewerTokens.get(socket)
+    if (token === undefined) return
+    const previous = viewerSessions.get(socket)
+    if (previous === session) return
+    if (previous !== undefined) void previous.removeScreencastWatcher(token).catch(() => {})
+    viewerSessions.set(socket, session)
+    void session.addScreencastWatcher(token).catch(() => {})
+  }
+
+  /** Drop one viewer's screencast subscription (socket closed / unloaded). */
+  const detachViewer = (socket: WebSocket): void => {
+    const token = viewerTokens.get(socket)
+    const session = viewerSessions.get(socket)
+    viewerTokens.delete(socket)
+    viewerSessions.delete(socket)
+    if (token === undefined || session === undefined) return
+    void session.removeScreencastWatcher(token).catch(() => {})
+  }
 
   const broadcastStatus = (session: SessionChrome): void => {
     const sockets = viewers.get(session.sessionId)
@@ -132,32 +173,41 @@ export function installApi(webCtx: Context, manager: ChromeManager): () => void 
   }
 
   const wire = (session: SessionChrome): void => {
-    if (wired.has(session)) return
-    // A window the user closed stays in the manager's map until the next call
-    // revives it as a fresh SessionChrome. Drop the dead instances' wiring so
-    // close/reopen cycles do not accumulate them (and the browsers they hold).
-    for (const stale of wired) {
-      if (stale !== session && !stale.isAlive()) wired.delete(stale)
-    }
-    wired.add(session)
-    session.onFrame = (frame) => {
-      const sockets = viewers.get(session.sessionId)
-      if (sockets === undefined || sockets.size === 0) return
-      const message: HostWsMessage = { type: 'frame', ...frame }
-      const data = JSON.stringify(message)
-      for (const socket of sockets) {
-        if (socket.readyState === WebSocket.OPEN) socket.send(data)
+    if (!wired.has(session)) {
+      // A window the user closed stays in the manager's map until the next call
+      // revives it as a fresh SessionChrome. Drop the dead instances' wiring so
+      // close/reopen cycles do not accumulate them (and the browsers they hold).
+      for (const stale of wired) {
+        if (stale !== session && !stale.isAlive()) wired.delete(stale)
+      }
+      wired.add(session)
+      session.onFrame = (frame) => {
+        const sockets = viewers.get(session.sessionId)
+        if (sockets === undefined || sockets.size === 0) return
+        const message: HostWsMessage = { type: 'frame', ...frame }
+        const data = JSON.stringify(message)
+        for (const socket of sockets) {
+          if (socket.readyState === WebSocket.OPEN) socket.send(data)
+        }
+      }
+      session.onEvent = (detail: ChromeEventDetail) => {
+        scheduleStatus(session)
+        const sockets = viewers.get(session.sessionId)
+        if (sockets === undefined || sockets.size === 0) return
+        const message: HostWsMessage = { type: 'event', detail }
+        const data = JSON.stringify(message)
+        for (const socket of sockets) {
+          if (socket.readyState === WebSocket.OPEN) socket.send(data)
+        }
       }
     }
-    session.onEvent = (detail: ChromeEventDetail) => {
-      scheduleStatus(session)
-      const sockets = viewers.get(session.sessionId)
-      if (sockets === undefined || sockets.size === 0) return
-      const message: HostWsMessage = { type: 'event', detail }
-      const data = JSON.stringify(message)
-      for (const socket of sockets) {
-        if (socket.readyState === WebSocket.OPEN) socket.send(data)
-      }
+    // Wire runs whenever a session becomes known (status poll, /open, control
+    // actions), so it is also where waiting viewers get their stream: a tab
+    // that was opened before the window existed attaches on the first wire
+    // after that window appears, without the viewer ever launching anything.
+    if (!session.isAlive()) return
+    for (const socket of viewers.get(session.sessionId) ?? []) {
+      if (socket.readyState === WebSocket.OPEN) attachViewer(socket, session)
     }
   }
 
@@ -175,10 +225,7 @@ export function installApi(webCtx: Context, manager: ChromeManager): () => void 
           const sessionId = requireSessionId(url.searchParams.get('sessionId'), 'sessionId')
           const session = manager.get(sessionId)
           if (session === undefined) {
-            sendJson(res, 200, {
-              sessionId, running: false, pages: [], startedAt: null, lastUsedAt: null,
-              idleDeadline: null, lastScreenshot: null, screencastActive: false, error: null,
-            })
+            sendJson(res, 200, stoppedStatus(sessionId))
             return
           }
           wire(session)
@@ -330,20 +377,18 @@ export function installApi(webCtx: Context, manager: ChromeManager): () => void 
     }
     set.add(socket)
     const token = { sessionId }
-    // Welcome with the live status, then start pushing frames while watched.
-    const session = manager.get(sessionId)
-    if (session !== undefined) {
-      wire(session)
-      void session.status().then((status) => {
-        if (socket.readyState !== WebSocket.OPEN) return
-        const welcome: HostWsMessage = { type: 'welcome', status }
-        socket.send(JSON.stringify(welcome))
-      })
-    }
-    void manager.getOrLaunch(sessionId).then((launched) => {
-      wire(launched)
-      void launched.addScreencastWatcher(token).catch(() => {})
-    })
+    viewerTokens.set(socket, token)
+    // Viewers observe only. Opening the Chrome tab attaches to a window that
+    // already exists and NEVER launches one — the browser starts solely from
+    // an explicit chrome_open tool call or the panel's Open button.
+    const mapped = manager.get(sessionId)
+    if (mapped !== undefined) wire(mapped)
+    // Welcome with the live status (or an idle one when nothing is running).
+    void (mapped?.status() ?? Promise.resolve(stoppedStatus(sessionId))).then((status) => {
+      if (socket.readyState !== WebSocket.OPEN) return
+      const welcome: HostWsMessage = { type: 'welcome', status }
+      socket.send(JSON.stringify(welcome))
+    }).catch(() => {})
     socket.on('message', (raw) => {
       let message: ClientWsMessage
       try {
@@ -359,8 +404,7 @@ export function installApi(webCtx: Context, manager: ChromeManager): () => void 
     socket.on('close', () => {
       set.delete(socket)
       if (set.size === 0) viewers.delete(sessionId)
-      const live = manager.get(sessionId)
-      if (live !== undefined) void live.removeScreencastWatcher(token)
+      detachViewer(socket)
     })
     socket.on('error', () => { /* close handler owns cleanup */ })
   })
@@ -389,6 +433,8 @@ export function installApi(webCtx: Context, manager: ChromeManager): () => void 
       for (const socket of sockets) socket.close(1001, 'plugin unloaded')
     }
     viewers.clear()
+    viewerTokens.clear()
+    viewerSessions.clear()
     wired.clear()
     wss.close()
   }

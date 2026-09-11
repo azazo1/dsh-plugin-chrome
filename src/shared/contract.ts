@@ -66,8 +66,15 @@ export type HostWsMessage =
   | { type: 'event'; detail: ChromeEventDetail }
   | { type: 'pong' }
 
-/** Client → host WebSocket frames. */
-export type ClientWsMessage = { type: 'ping' } | { type: 'subscribe-screencast' } | { type: 'unsubscribe-screencast' }
+/**
+ * Client → host WebSocket frames.
+ *
+ * There is no subscribe/unsubscribe message: the host attaches every viewer
+ * socket to whatever window already exists when the socket connects, and
+ * never launches one on the client's behalf. The client only keeps the
+ * connection alive.
+ */
+export type ClientWsMessage = { type: 'ping' }
 
 /** Fine-grained change notices carried inside the `event` frame. */
 export type ChromeEventDetail =

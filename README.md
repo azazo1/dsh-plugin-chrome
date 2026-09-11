@@ -67,7 +67,7 @@ The agent will: `chrome_open` → `chrome_navigate` → `chrome_screenshot` (see
 
 ### Window lifecycle & resilience
 
-- **Lazy start**: Chrome launches only on the first `chrome_*` call (or the panel's Open button).
+- **Lazy start**: Chrome launches only on the first `chrome_*` call (or the panel's Open button). Merely opening the **Chrome** tab in a conversation does **not** start a browser — it attaches to a window that already exists.
 - **Orphan adoption**: if DSH died and left a Chrome behind (profile locked), the plugin reconnects through `DevToolsActivePort` and takes the window over instead of failing (the same autoConnect idea as chrome-devtools-mcp).
 - **Idle reaping**: a window idle past `idleTimeoutMs` (default 10 min) closes automatically — never while a Web UI viewer is watching.
 - **Auto tab recovery**: every operation makes sure a usable tab exists, so a window full of `chrome://` internal pages never dead-ends.
@@ -95,7 +95,7 @@ Data directory (browser profiles & screenshots): `~/.dsh/data/dsh-plugin-chrome/
 
 ## FAQ
 
-- **The Chrome tab shows nothing**: check the window is running (status dot at the top); the first launch takes a few seconds. Idle pages get a forced frame about every 2 seconds via the heartbeat (after 3 seconds without a real frame); activity raises the frame rate automatically.
+- **The Chrome tab shows nothing**: that is how the panel looks while no window is running — opening the tab does not start Chrome on its own (so a glance at it never spawns a browser); click Open in the panel or let the agent call `chrome_open` once. Once the window runs, check the status dot at the top. Idle pages get a forced frame about every 2 seconds via the heartbeat (after 3 seconds without a real frame); activity raises the frame rate automatically.
 - **Agent says "unknown uid"**: the page changed — have it re-run `chrome_snapshot`.
 - **I closed the window myself**: the panel shows "window closed"; any next `chrome_*` call or the Open button relaunches it.
 - **Login state**: each session uses an isolated profile, so logins don't carry over from your daily browser — that's by design. To log in somewhere, let the agent complete the login (it persists for the session).
