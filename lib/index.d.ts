@@ -40,6 +40,13 @@ interface Config {
   maxSnapshotText?: number;
   /** Maximum tabs a session window may open. */
   maxTabs?: number;
+  /**
+   * Ask the user to approve each session's FIRST browser launch through the
+   * DSH approval channel; later calls in that session run without asking.
+   * Deployments that compose no approval service (plain CLI / headless) have
+   * nobody to ask, so the gate stands down there instead of failing the call.
+   */
+  confirmFirstLaunch?: boolean;
 }
 /** Loader-validated config schema; defaults come from {@link DEFAULTS}. */
 declare const Config: z<Config>;

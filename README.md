@@ -29,6 +29,7 @@
 - **Accessibility-tree snapshots**: `chrome_snapshot` returns a compact a11y tree with stable element uids; clicks and fills target uids directly — far lighter than DOM dumps and robust against fragile selectors.
 - **Dual-channel screenshots**: `chrome_screenshot` sends the image into the model context (as an image block) AND saves it to the session's screenshot history shown in the panel — history entries keep title/URL/size metadata across restarts. (Running a text-only model? See the FAQ.)
 - **Security-minded**: CDP never exposes a fixed port; the Web API rejects cross-site requests (Sec-Fetch-Site) and whitelist-validates sessionId; browser data is isolated per session.
+- **First launch asks you first**: each session's first browser launch goes through one approval prompt (the native DSH approval channel, answered in the Web GUI); once allowed, every later `chrome_*` call of that session runs without asking. A rejection starts nothing and the next call asks again. Deployments without an approval channel (plain CLI / headless) skip the step.
 - **Resource governance**: idle windows auto-close (default 10 min, configurable), `chrome_close` closes explicitly, and plugin unload / host shutdown closes every window it opened.
 
 ## Install
@@ -71,6 +72,7 @@ The agent will: `chrome_open` → `chrome_navigate` → `chrome_screenshot` (see
 - **Orphan adoption**: if DSH died and left a Chrome behind (profile locked), the plugin reconnects through `DevToolsActivePort` and takes the window over instead of failing (the same autoConnect idea as chrome-devtools-mcp).
 - **Idle reaping**: a window idle past `idleTimeoutMs` (default 10 min) closes automatically — never while a Web UI viewer is watching.
 - **Auto tab recovery**: every operation makes sure a usable tab exists, so a window full of `chrome://` internal pages never dead-ends.
+- **Approval on first launch**: any `chrome_*` call that would really start the browser (including the implicit launch of `chrome_navigate` / `chrome_snapshot` and friends) asks the user once per session before it runs; after the grant the window starts, the session is remembered as consented, and later calls pass straight through. An already open window is reused without asking. The grant lives in memory only, is scoped to one session, and dies with the host process; set `confirmFirstLaunch: false` to switch the whole thing off.
 
 ## Configuration
 
@@ -88,6 +90,7 @@ Override the plugin row in the profile's `cordis.patch.yml` (config is replaced 
     screencastQuality: 70      # JPEG quality 1-100
     maxSnapshotText: 60000     # max chars per snapshot
     maxTabs: 16
+    confirmFirstLaunch: true   # one approval prompt before a session's first launch (false = never ask)
     extraArgs: ''              # extra Chrome launch flags
 ```
 
@@ -96,6 +99,7 @@ Data directory (browser profiles & screenshots): `~/.dsh/data/dsh-plugin-chrome/
 ## FAQ
 
 - **The Chrome tab shows nothing**: that is how the panel looks while no window is running — opening the tab does not start Chrome on its own (so a glance at it never spawns a browser); click Open in the panel or let the agent call `chrome_open` once. Once the window runs, check the status dot at the top. Idle pages get a forced frame about every 2 seconds via the heartbeat (after 3 seconds without a real frame); activity raises the frame rate automatically.
+- **The first `chrome_open` shows an approval prompt**: that is the user confirmation for this session's first browser launch (see "Window lifecycle & resilience"). Click Allow once and the session stops asking; if it was rejected by mistake, no window started, so let the agent call it again — or press Open in the panel yourself.
 - **Agent says "unknown uid"**: the page changed — have it re-run `chrome_snapshot`.
 - **I closed the window myself**: the panel shows "window closed"; any next `chrome_*` call or the Open button relaunches it.
 - **Login state**: each session uses an isolated profile, so logins don't carry over from your daily browser — that's by design. To log in somewhere, let the agent complete the login (it persists for the session).

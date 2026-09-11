@@ -45,6 +45,13 @@ export interface Config {
   maxSnapshotText?: number
   /** Maximum tabs a session window may open. */
   maxTabs?: number
+  /**
+   * Ask the user to approve each session's FIRST browser launch through the
+   * DSH approval channel; later calls in that session run without asking.
+   * Deployments that compose no approval service (plain CLI / headless) have
+   * nobody to ask, so the gate stands down there instead of failing the call.
+   */
+  confirmFirstLaunch?: boolean
 }
 
 /** Single source of truth for defaults (schema + resolver). */
@@ -60,6 +67,7 @@ const DEFAULTS = {
   screencastQuality: 70,
   maxSnapshotText: 60000,
   maxTabs: 16,
+  confirmFirstLaunch: true,
 } as const satisfies Record<keyof Config, string | number | boolean>
 
 /** Loader-validated config schema; defaults come from {@link DEFAULTS}. */
@@ -75,6 +83,7 @@ export const Config: z<Config> = z.object({
   screencastQuality: z.number().min(1).max(100).default(DEFAULTS.screencastQuality),
   maxSnapshotText: z.number().min(1000).default(DEFAULTS.maxSnapshotText),
   maxTabs: z.number().min(1).default(DEFAULTS.maxTabs),
+  confirmFirstLaunch: z.boolean().default(DEFAULTS.confirmFirstLaunch),
 })
 
 /** Resolved shape after the Loader applies schema defaults. */
@@ -96,5 +105,6 @@ export function resolveConfig(raw: Partial<Config> = {}): ResolvedConfig {
     screencastQuality: raw.screencastQuality ?? DEFAULTS.screencastQuality,
     maxSnapshotText: raw.maxSnapshotText ?? DEFAULTS.maxSnapshotText,
     maxTabs: raw.maxTabs ?? DEFAULTS.maxTabs,
+    confirmFirstLaunch: raw.confirmFirstLaunch ?? DEFAULTS.confirmFirstLaunch,
   }
 }

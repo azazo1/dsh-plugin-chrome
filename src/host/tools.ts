@@ -18,15 +18,19 @@ import {
   WAIT_TIMEOUT_MS, waitForText,
 } from './actions.ts'
 import type { ResolvedConfig } from './config.ts'
+import { needsLaunchConsent, type LaunchConsent } from './consent.ts'
 import type { ChromeManager, SessionChrome } from './manager.ts'
 import { resolveUid, snapshotPage } from './snapshot.ts'
 import { appendShot } from './shots.ts'
 import type { ChromeStatus, PageInfo, ScreenshotEntry } from '../shared/contract.ts'
+import { shortSessionId } from '../shared/contract.ts'
 
 /** Dependency bundle threaded through every tool factory. */
 export interface ToolDeps {
   manager: ChromeManager
   config: ResolvedConfig
+  /** Session-scoped memory of the user's approval to launch a window. */
+  consent: LaunchConsent
   /**
    * Attach one image to the model stream (via ctx.attachments). Absent in
    * surfaces without the attachment service — the tool then reports the
@@ -45,10 +49,50 @@ function sessionIdOf(exec: ToolRunContext): string {
 }
 
 /** Resolve the session window and its control page (launching when needed). */
-async function resolveTarget(manager: ChromeManager, sessionId: string): Promise<{ session: SessionChrome; pageIndex: number }> {
-  const session = await manager.getOrLaunch(sessionId)
+async function resolveTarget(deps: ToolDeps, sessionId: string): Promise<{ session: SessionChrome; pageIndex: number }> {
+  const session = await deps.manager.getOrLaunch(sessionId)
+  // Reaching this point means the launch was either approved by the user or
+  // served an already open window: either way the session is consented, so
+  // later calls run without another question.
+  deps.consent.grant(sessionId)
   await session.ensurePage()
   return { session, pageIndex: session.selectedIndex }
+}
+
+/**
+ * Ask the user once per session before this session's first browser launch.
+ *
+ * The gate answers with the tool runtime's own `ask` decision instead of
+ * prompting directly, so the question reaches whatever answerer is composed
+ * (Web GUI approval panel), is audited on the session log, and honors the
+ * session's approval policy. A granted `ask` runs the tool body, which records
+ * the consent; a rejection leaves the session unconsented, so the next call
+ * asks again.
+ *
+ * Deployments that compose no approval service (plain CLI / headless) have
+ * nobody to ask, and the gate stands down there rather than failing the call.
+ */
+export function consentGate(ctx: Context, deps: ToolDeps): () => void {
+  return ctx.on('tools/pre-execute', async (exec, next) => {
+    // Delegate first: a listener that already denied or claimed the call keeps
+    // its decision, and the question is never asked about a call that cannot run.
+    const decision = await next()
+    if (decision.kind !== 'allow') return decision
+    const sessionId = exec.agent?.session?.id
+    if (typeof sessionId !== 'string' || sessionId === '') return decision
+    const window = deps.manager.get(sessionId)
+    const ask = needsLaunchConsent({
+      toolName: exec.name,
+      hasWindow: window !== undefined && window.isAlive(),
+      granted: deps.consent.isGranted(sessionId),
+      enabled: deps.config.confirmFirstLaunch,
+    })
+    if (!ask || ctx.get('approval') === undefined) return decision
+    return {
+      kind: 'ask',
+      reason: `首次在会话 ${shortSessionId(sessionId)} 中启动可见 Chrome 窗口, 同意后本会话内的浏览器操作不再询问.`,
+    }
+  })
 }
 
 /** Serialize the caller's signal into a readable abort error. */
@@ -66,9 +110,9 @@ function pageLine(page: PageInfo): string {
 /** Render a status object as compact model text. */
 export function formatStatus(status: ChromeStatus): string {
   if (!status.running) {
-    return `Chrome 窗口未运行（会话 ${status.sessionId.slice(0, 8)}）。用 chrome_open 打开。${status.error ? `\n错误：${status.error}` : ''}`
+    return `Chrome 窗口未运行（会话 ${shortSessionId(status.sessionId)}）。用 chrome_open 打开。${status.error ? `\n错误：${status.error}` : ''}`
   }
-  const lines = [`Chrome 窗口运行中（会话 ${status.sessionId.slice(0, 8)}），${status.pages.length} 个标签页：`]
+  const lines = [`Chrome 窗口运行中（会话 ${shortSessionId(status.sessionId)}），${status.pages.length} 个标签页：`]
   for (const page of status.pages) lines.push(pageLine(page))
   if (status.lastScreenshot !== null) lines.push(`最近截图：${status.lastScreenshot}`)
   return lines.join('\n')
@@ -81,7 +125,7 @@ type RegisterFn = (tool: ReturnType<typeof defineTool>) => void
 function openTool(deps: ToolDeps): ReturnType<typeof defineTool> {
   return defineTool({
     name: 'chrome_open',
-    description: '打开（或复用）本会话专属的可见 Chrome 窗口，并返回当前状态。窗口是真实的、用户可以看到并手动操作的浏览器；首次调用会自动启动 Chrome（惰性启动）。可选参数 url 指定窗口打开后立即导航到的地址（缺省显示欢迎页）。窗口保持打开直到 chrome_close 或空闲超时。任何 chrome_* 工具在窗口未打开时都会自动触发打开，因此本工具主要用于显式控制生命周期或指定初始地址。',
+    description: '打开（或复用）本会话专属的可见 Chrome 窗口，并返回当前状态。窗口是真实的、用户可以看到并手动操作的浏览器；首次调用会自动启动 Chrome（惰性启动）。本会话首次启动窗口前会先向用户发起一次审批请求, 用户同意后本会话内不再询问; 被拒绝时不要反复重试, 应告知用户。可选参数 url 指定窗口打开后立即导航到的地址（缺省显示欢迎页）。窗口保持打开直到 chrome_close 或空闲超时。其他 chrome_* 工具在窗口未打开时同样会自动触发打开（并同样需要这次审批），因此本工具主要用于显式控制生命周期或指定初始地址。',
     parameters: {
       url: { type: 'string', description: '打开后立即导航到的 URL（可省略协议，如 example.com）。缺省显示欢迎页。' },
     },
@@ -101,11 +145,12 @@ function openTool(deps: ToolDeps): ReturnType<typeof defineTool> {
       throwIfAborted(exec.signal)
       const sessionId = sessionIdOf(exec)
       const session = await deps.manager.getOrLaunch(sessionId, args.url)
+      deps.consent.grant(sessionId)
       const status = await session.status()
       return {
         running: status.running,
         pages: status.pages.length,
-        text: `Chrome 窗口已打开（会话 ${sessionId.slice(0, 8)}）。\n${formatStatus(status)}`,
+        text: `Chrome 窗口已打开（会话 ${shortSessionId(sessionId)}）。\n${formatStatus(status)}`,
       }
     },
   })
@@ -156,7 +201,7 @@ function closeTool(deps: ToolDeps): ReturnType<typeof defineTool> {
       throwIfAborted(exec.signal)
       const sessionId = sessionIdOf(exec)
       await deps.manager.close(sessionId)
-      return { text: `Chrome 窗口已关闭（会话 ${sessionId.slice(0, 8)}）。` }
+      return { text: `Chrome 窗口已关闭（会话 ${shortSessionId(sessionId)}）。` }
     },
   })
 }
@@ -190,7 +235,7 @@ function navigateTool(deps: ToolDeps): ReturnType<typeof defineTool> {
     execute: async (args, exec) => {
       throwIfAborted(exec.signal)
       const sessionId = sessionIdOf(exec)
-      const { session, pageIndex } = await resolveTarget(deps.manager, sessionId)
+      const { session, pageIndex } = await resolveTarget(deps, sessionId)
       return session.run(async () => {
         const page = await session.selected()
         if (page === undefined) throw new Error('没有可用的标签页。')
@@ -235,7 +280,7 @@ function tabsTool(deps: ToolDeps): ReturnType<typeof defineTool> {
     execute: async (args, exec) => {
       throwIfAborted(exec.signal)
       const sessionId = sessionIdOf(exec)
-      const { session } = await resolveTarget(deps.manager, sessionId)
+      const { session } = await resolveTarget(deps, sessionId)
       return session.run(async () => {
         if (args.action === 'list') {
           const status = await session.status()
@@ -281,7 +326,7 @@ function snapshotTool(deps: ToolDeps): ReturnType<typeof defineTool> {
     execute: async (args, exec) => {
       throwIfAborted(exec.signal)
       const sessionId = sessionIdOf(exec)
-      const { session, pageIndex } = await resolveTarget(deps.manager, sessionId)
+      const { session, pageIndex } = await resolveTarget(deps, sessionId)
       return session.run(async () => {
         const page = await session.selected()
         if (page === undefined) throw new Error('没有可用的标签页。')
@@ -344,7 +389,7 @@ function screenshotTool(deps: ToolDeps): ReturnType<typeof defineTool> {
     execute: async (args, exec) => {
       throwIfAborted(exec.signal)
       const sessionId = sessionIdOf(exec)
-      const { session, pageIndex } = await resolveTarget(deps.manager, sessionId)
+      const { session, pageIndex } = await resolveTarget(deps, sessionId)
       return session.run(async () => {
         const page = await session.selected()
         if (page === undefined) throw new Error('没有可用的标签页。')
@@ -360,7 +405,7 @@ function screenshotTool(deps: ToolDeps): ReturnType<typeof defineTool> {
           backendNodeId,
         })
         const mediaType = format === 'jpeg' ? 'image/jpeg' : 'image/png'
-        const name = `shot-${Date.now()}-${sessionId.slice(0, 8)}.${format}`
+        const name = `shot-${Date.now()}-${shortSessionId(sessionId)}.${format}`
         const path = join(session.screenshotsDir, name)
         writeFileSync(path, buffer)
         const title = await page.title().catch(() => '')
@@ -410,7 +455,7 @@ function clickTool(deps: ToolDeps): ReturnType<typeof defineTool> {
     execute: async (args, exec) => {
       throwIfAborted(exec.signal)
       const sessionId = sessionIdOf(exec)
-      const { session, pageIndex } = await resolveTarget(deps.manager, sessionId)
+      const { session, pageIndex } = await resolveTarget(deps, sessionId)
       return session.run(async () => {
         const page = await session.selected()
         if (page === undefined) throw new Error('没有可用的标签页。')
@@ -448,7 +493,7 @@ function clickAtTool(deps: ToolDeps): ReturnType<typeof defineTool> {
     execute: async (args, exec) => {
       throwIfAborted(exec.signal)
       const sessionId = sessionIdOf(exec)
-      const { session } = await resolveTarget(deps.manager, sessionId)
+      const { session } = await resolveTarget(deps, sessionId)
       return session.run(async () => {
         const page = await session.selected()
         if (page === undefined) throw new Error('没有可用的标签页。')
@@ -484,7 +529,7 @@ function fillTool(deps: ToolDeps): ReturnType<typeof defineTool> {
     execute: async (args, exec) => {
       throwIfAborted(exec.signal)
       const sessionId = sessionIdOf(exec)
-      const { session, pageIndex } = await resolveTarget(deps.manager, sessionId)
+      const { session, pageIndex } = await resolveTarget(deps, sessionId)
       return session.run(async () => {
         const page = await session.selected()
         if (page === undefined) throw new Error('没有可用的标签页。')
@@ -520,7 +565,7 @@ function typeTool(deps: ToolDeps): ReturnType<typeof defineTool> {
     execute: async (args, exec) => {
       throwIfAborted(exec.signal)
       const sessionId = sessionIdOf(exec)
-      const { session } = await resolveTarget(deps.manager, sessionId)
+      const { session } = await resolveTarget(deps, sessionId)
       return session.run(async () => {
         const page = await session.selected()
         if (page === undefined) throw new Error('没有可用的标签页。')
@@ -550,7 +595,7 @@ function pressKeyTool(deps: ToolDeps): ReturnType<typeof defineTool> {
     execute: async (args, exec) => {
       throwIfAborted(exec.signal)
       const sessionId = sessionIdOf(exec)
-      const { session } = await resolveTarget(deps.manager, sessionId)
+      const { session } = await resolveTarget(deps, sessionId)
       return session.run(async () => {
         const page = await session.selected()
         if (page === undefined) throw new Error('没有可用的标签页。')
@@ -580,7 +625,7 @@ function hoverTool(deps: ToolDeps): ReturnType<typeof defineTool> {
     execute: async (args, exec) => {
       throwIfAborted(exec.signal)
       const sessionId = sessionIdOf(exec)
-      const { session, pageIndex } = await resolveTarget(deps.manager, sessionId)
+      const { session, pageIndex } = await resolveTarget(deps, sessionId)
       return session.run(async () => {
         const page = await session.selected()
         if (page === undefined) throw new Error('没有可用的标签页。')
@@ -618,7 +663,7 @@ function scrollTool(deps: ToolDeps): ReturnType<typeof defineTool> {
     execute: async (args, exec) => {
       throwIfAborted(exec.signal)
       const sessionId = sessionIdOf(exec)
-      const { session } = await resolveTarget(deps.manager, sessionId)
+      const { session } = await resolveTarget(deps, sessionId)
       return session.run(async () => {
         const page = await session.selected()
         if (page === undefined) throw new Error('没有可用的标签页。')
@@ -651,7 +696,7 @@ function evaluateTool(deps: ToolDeps): ReturnType<typeof defineTool> {
     execute: async (args, exec) => {
       throwIfAborted(exec.signal)
       const sessionId = sessionIdOf(exec)
-      const { session } = await resolveTarget(deps.manager, sessionId)
+      const { session } = await resolveTarget(deps, sessionId)
       return session.run(async () => {
         const page = await session.selected()
         if (page === undefined) throw new Error('没有可用的标签页。')
@@ -692,7 +737,7 @@ function waitTool(deps: ToolDeps): ReturnType<typeof defineTool> {
     execute: async (args, exec) => {
       throwIfAborted(exec.signal)
       const sessionId = sessionIdOf(exec)
-      const { session } = await resolveTarget(deps.manager, sessionId)
+      const { session } = await resolveTarget(deps, sessionId)
       return session.run(async () => {
         const page = await session.selected()
         if (page === undefined) throw new Error('没有可用的标签页。')
@@ -714,6 +759,7 @@ export function registerTools(ctx: Context, deps: ToolDeps): () => void {
   const register: RegisterFn = (tool) => {
     disposers.push(ctx.tools.register(tool))
   }
+  disposers.push(consentGate(ctx, deps))
   register(openTool(deps))
   register(statusTool(deps))
   register(closeTool(deps))

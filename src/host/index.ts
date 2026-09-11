@@ -17,6 +17,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { Config, resolveConfig } from './config.ts'
 import type { Config as ConfigShape } from './config.ts'
 import { resolveDataRoot } from './browser.ts'
+import { LaunchConsent } from './consent.ts'
 import { ChromeManager } from './manager.ts'
 import { registerTools, type ToolDeps } from './tools.ts'
 import { installApi } from './api.ts'
@@ -39,6 +40,9 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
   const config = resolveConfig(rawConfig)
   const dataRoot = resolveDataRoot(config.dataRoot)
   const manager = new ChromeManager(config, dataRoot)
+  // One consent record for the whole plugin instance: it holds the sessions
+  // whose user already approved launching a window (see ./consent.ts).
+  const consent = new LaunchConsent()
 
   // Optional attachment service (image blocks for the model). Probed per
   // call through ctx.get so tool registration never waits on a service
@@ -46,6 +50,7 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
   const deps: ToolDeps = {
     manager,
     config,
+    consent,
     attachImage: async (data, mediaType) => {
       const attachments = ctx.get('attachments') as { saveImage(input: { data: Uint8Array; mediaType: typeof mediaType }): Promise<import('@deepseek-ai/dsh-attachment').ImageAttachmentRef> } | undefined
       if (attachments === undefined) throw new Error('attachment service unavailable')

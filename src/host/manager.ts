@@ -12,7 +12,7 @@ import type { Browser, CDPSession, Page } from 'puppeteer-core'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ChromeEventDetail, ChromeStatus, PageInfo } from '../shared/contract.ts'
-import { SCREENSHOTS_DIR, SESSIONS_DIR } from '../shared/contract.ts'
+import { SCREENSHOTS_DIR, SESSIONS_DIR, shortSessionId } from '../shared/contract.ts'
 import type { UidEntry } from './snapshot.ts'
 import { closeBrowserHard, findBrowser, forceWindowVisible, launchBrowser, launchOptions } from './browser.ts'
 import { captureScreenshot, navigate, NAV_TIMEOUT_MS, normalizeUrl } from './actions.ts'
@@ -24,7 +24,7 @@ const INTERNAL_URL_RE = /^(chrome|chrome-extension|devtools|edge|view-source):/i
 
 /** Welcome page shown in a freshly launched window (data: URL). */
 function welcomePage(sessionId: string): string {
-  const short = sessionId.slice(0, 8)
+  const short = shortSessionId(sessionId)
   const body = [
     '<title>DSH Chrome</title>',
     '<body style="font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#1e1e2e;color:#cdd6f4">',
@@ -95,7 +95,7 @@ export class SessionChrome {
 
   /** Human-readable short id for logs. */
   get shortId(): string {
-    return this.sessionId.slice(0, 8)
+    return shortSessionId(this.sessionId)
   }
 
   /** Control pages (visible tabs; internal pages filtered). */

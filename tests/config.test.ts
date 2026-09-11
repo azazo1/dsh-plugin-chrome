@@ -10,6 +10,7 @@ describe('resolveConfig', () => {
     expect(config.maxTabs).toBe(16)
     expect(config.maxSnapshotText).toBe(60000)
     expect(config.screencastFrameSkip).toBe(4)
+    expect(config.confirmFirstLaunch).toBe(true)
   })
 
   it('keeps explicit values', () => {
