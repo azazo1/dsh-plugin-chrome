@@ -238,17 +238,16 @@ export function ChromeTab(props: ConvViewProps & ChromeTabProps): JSX.Element {
           </div>
           <div className="dsh-chrome-tab__tabs">
             {(status?.pages ?? []).map((page) => (
-              <div key={page.index} style={{ display: 'flex', gap: 2 }}>
+              <div key={page.index} className="dsh-chrome-tab__row">
                 <button
                   className={`dsh-chrome-tab__tab ${page.selected ? 'dsh-chrome-tab__tab--active' : ''}`}
                   onClick={() => selectTab(page.index)}
-                  title={`${t('action.select')} [${page.index}]`}
+                  title={`${t('action.select')} [${page.index}] ${page.title || page.url || ''}`}
                 >
                   {page.index === activeIndex ? '▶ ' : ''}{page.title || page.url || `[${page.index}]`}
                 </button>
                 <button
-                  className="dsh-chrome-tab__tab"
-                  style={{ flex: '0 0 auto', paddingLeft: 4, paddingRight: 4 }}
+                  className="dsh-chrome-tab__tab dsh-chrome-tab__tabClose"
                   onClick={() => closeTab(page.index)}
                   title={`${t('action.closeTab')} [${page.index}]`}
                 >✕</button>

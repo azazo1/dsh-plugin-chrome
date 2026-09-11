@@ -106,12 +106,12 @@ Data directory (browser profiles & screenshots): `~/.dsh/data/dsh-plugin-chrome/
 ## Development
 
 ```sh
-npm install
-npm run typecheck   # host + client programs
-npm test            # vitest unit tests
-npm run test:e2e    # real-Chrome end-to-end smoke (pops a visible window)
-npm run build       # lib/index.js + lib/index.d.ts (host), lib/client.js + lib/client.d.ts (client bundle)
-npm run watch       # continuous build; client changes hot-reload, host changes need a DSH restart
+pnpm install
+pnpm typecheck   # host + client programs
+pnpm test        # vitest unit tests
+pnpm test:e2e    # real-Chrome end-to-end smoke (pops a visible window)
+pnpm build       # lib/index.js + lib/index.d.ts (host), lib/client.js + lib/client.d.ts (client bundle)
+pnpm watch       # continuous build; client changes hot-reload, host changes need a DSH restart
 ```
 
 Architecture: the host half (cordis plugin) drives the local Chrome through puppeteer-core, registers the `chrome_*` tools and the `/dsh-chrome/*` HTTP/WS API; the client half (browser bundle) registers the Chrome tab on `conversation.view` and consumes the API and the frame stream. The picture = native Chrome screencast (active pages) + screenshot heartbeat (idle fallback). The control layer borrows proven designs from [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp) (CDP control, a11y snapshots with uid lookup, wait discipline, autoConnect adoption) and [mcp-chrome](https://github.com/hangwin/mcp-chrome) (screenshot compression, CDP coordinate input, session refcounting).

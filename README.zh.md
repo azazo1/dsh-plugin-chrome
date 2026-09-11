@@ -106,12 +106,12 @@ Agent 会：`chrome_open` → `chrome_navigate` → `chrome_screenshot`（看图
 ## 开发
 
 ```sh
-npm install
-npm run typecheck   # host + client 两个 program
-npm test            # vitest 单测
-npm run test:e2e    # 真实 Chrome 端到端冒烟（会弹出可见窗口）
-npm run build       # lib/index.js + lib/index.d.ts（host）、lib/client.js + lib/client.d.ts（client bundle）
-npm run watch       # 开发时持续构建；client 变更经 HMR 热更，host 变更需重启 DSH
+pnpm install    # 本仓库统一使用 pnpm
+pnpm typecheck   # host + client 两个 program
+pnpm test        # vitest 单测
+pnpm test:e2e    # 真实 Chrome 端到端冒烟 (会弹出可见窗口)
+pnpm build       # lib/index.js + lib/index.d.ts (host), lib/client.js + lib/client.d.ts (client bundle)
+pnpm watch       # 开发时持续构建; client 变更经 HMR 热更, host 变更需重启 DSH
 ```
 
 架构：host 半（cordis 插件）用 puppeteer-core 驱动本机 Chrome，注册 `chrome_*` 工具与 `/dsh-chrome/*` HTTP/WS API；client 半（浏览器 bundle）注册 `conversation.view` 的「Chrome」标签页，消费 API 与帧流。画面流 = Chrome 原生 screencast（活动页）+ 截图心跳（静止页兜底）。控制层借鉴 [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp)（CDP 控制、a11y 快照+uid 反查、等待机制、autoConnect 接管）与 [mcp-chrome](https://github.com/hangwin/mcp-chrome)（截图压缩、CDP 坐标输入、会话引用计数）的成熟设计。
