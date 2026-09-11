@@ -414,7 +414,10 @@ function screenshotTool(deps: ToolDeps): ReturnType<typeof defineTool> {
           url: { type: 'string', required: true, description: '截图时页面 URL' },
           attachment: {
             type: 'object',
-            additionalProperties: false,
+            // 这个对象由 attachment 服务产生, 上游会往里加字段 (例如图片
+            // 被归一化缩小时的 originalDimensions), 所以这里声明为开放对象,
+            // 否则上游一次向后兼容的扩展就会让整次截图失败.
+            additionalProperties: true,
             description: '模型图片引用（内部字段，attachment 服务可用时存在）',
             properties: {
               attachmentId: { type: 'string', required: true },
@@ -423,13 +426,30 @@ function screenshotTool(deps: ToolDeps): ReturnType<typeof defineTool> {
               width: { type: 'integer', required: true },
               height: { type: 'integer', required: true },
               name: { type: 'string' },
+              originalDimensions: {
+                type: 'object',
+                additionalProperties: true,
+                description: '图片被归一化缩小时的原图尺寸（像素）',
+                properties: {
+                  width: { type: 'integer', required: true },
+                  height: { type: 'integer', required: true },
+                },
+              },
             },
           },
         },
       },
       render: (_args, value) => {
-        const attachment = value.attachment as ImageAttachmentRef | undefined
-        const text = `截图已保存：${value.path}（${value.width}x${value.height}，${Math.round(value.bytes / 1024)}KB）`
+        // 规范值里的 attachment 就是 attachment 服务自己的引用, 原样交还给
+        // 图片块 (它可能带当前编译期类型还不认识的字段, 所以不做逐字段重建);
+        // JSON 投影表达不了其中品牌化的 id, 故需要一次转换.
+        const attachment = value.attachment as unknown as ImageAttachmentRef | undefined
+        const original = value.attachment?.originalDimensions
+        // 被归一化缩放时告知模型: 它看到的像素坐标不是原图坐标.
+        const scaled = original === undefined
+          ? ''
+          : `; 图片已被缩小, 原图 ${original.width}x${original.height} 像素, 定位坐标请按原图折算`
+        const text = `截图已保存: ${value.path} (${value.width}x${value.height}, ${Math.round(value.bytes / 1024)}KB)${scaled}`
         if (attachment !== undefined && typeof attachment.attachmentId === 'string') {
           return [{ type: 'image', attachment }, { type: 'text', text }]
         }
@@ -478,7 +498,10 @@ function screenshotTool(deps: ToolDeps): ReturnType<typeof defineTool> {
         return {
           path, name, width, height, bytes: buffer.length, mediaType,
           pageTitle: title, url,
-          attachment: attachment ?? undefined,
+          // 展开成字面量: 规范值必须是开放式 JSON 对象, attachment 服务日后
+          // 新增的字段要能原样带进会话日志. 没有附件时整个键都不出现, 因为
+          // 值为 undefined 的属性过不了 registry 的 lossless JSON 检查.
+          ...attachment === undefined ? {} : { attachment: { ...attachment } },
         }
       })
     },

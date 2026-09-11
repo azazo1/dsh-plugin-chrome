@@ -8,7 +8,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
-import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
+import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
+import type { JsonValue, ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { resolveConfig } from '../src/host/config.ts'
 import { LaunchConsent } from '../src/host/consent.ts'
 import { registerTools, type ToolDeps } from '../src/host/tools.ts'
@@ -95,5 +96,56 @@ describe('工具卡片用模型给的文字做标题', () => {
     const tools = suite()
     expect(titleOf(tools.get('chrome_status') as ToolDefinition, {})).not.toBe('')
     expect(titleOf(tools.get('chrome_close') as ToolDefinition, {})).not.toBe('')
+  })
+})
+
+/** 一次成功截图的完整返回值; 图片超预算被缩小时 attachment 会多带原图尺寸. */
+function shotValue(originalDimensions?: { width: number; height: number }): JsonValue {
+  return {
+    path: '/tmp/shot.png',
+    name: 'shot.png',
+    width: 1280,
+    height: 800,
+    bytes: 4096,
+    mediaType: 'image/png',
+    pageTitle: 'Example',
+    url: 'https://example.com/',
+    attachment: {
+      attachmentId: 'sha256:0',
+      mediaType: 'image/png',
+      bytes: 2048,
+      width: 1280,
+      height: 800,
+      name: 'shot.png',
+      ...originalDimensions === undefined ? {} : { originalDimensions },
+    },
+  }
+}
+
+describe('chrome_screenshot 的输出契约', () => {
+  it('attachment 是开放对象, 上游附加字段不会让截图失败', () => {
+    const shot = suite().get('chrome_screenshot') as ToolDefinition
+    // 这里走的就是 registry 对每个成功返回值施加的同一条校验.
+    expect(validateJsonSchemaValue(shot.output.schema, shotValue({ width: 1280, height: 9000 }), 'value')).toEqual([])
+    // 上游日后新增字段 (此处模拟) 同样应当通过.
+    const extended = shotValue() as Record<string, JsonValue>
+    extended.attachment = { ...extended.attachment as Record<string, JsonValue>, futureField: 'x' }
+    expect(validateJsonSchemaValue(shot.output.schema, extended, 'value')).toEqual([])
+  })
+
+  it('图片被缩小时文案给出原图尺寸', () => {
+    const shot = suite().get('chrome_screenshot') as ToolDefinition
+    expect(JSON.stringify(shot.output.render({}, shotValue({ width: 1280, height: 9000 })))).toContain('1280x9000')
+    expect(JSON.stringify(shot.output.render({}, shotValue()))).not.toContain('9000')
+  })
+
+  it('没有 attachment 服务的部署必须整键省略 attachment', () => {
+    const shot = suite().get('chrome_screenshot') as ToolDefinition
+    // 值为 undefined 的属性既不是合法值, 也过不了 lossless JSON 检查,
+    // 所以工具在无附件服务时不能返回 { attachment: undefined }.
+    const absent = shotValue() as Record<string, JsonValue>
+    delete absent.attachment
+    expect(validateJsonSchemaValue(shot.output.schema, absent, 'value')).toEqual([])
+    expect(JSON.stringify(shot.output.render({}, absent))).toContain('/tmp/shot.png')
   })
 })
