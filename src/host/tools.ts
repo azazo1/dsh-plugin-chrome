@@ -5,6 +5,11 @@
  * Chrome window, and all operations funnel through that session's serial
  * queue. Tools fail with readable Chinese messages instead of raw CDP
  * errors, so the model can self-correct (re-snapshot, re-open, re-select).
+ *
+ * Whatever the user reads comes from the model, not from this file: the launch
+ * approval reason is `chrome_open`'s required `justification`, and the tools
+ * whose arguments mean nothing to a reader carry a required `description`.
+ * Every tool additionally declares a `presentCall` card intent.
  */
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -18,7 +23,7 @@ import {
   WAIT_TIMEOUT_MS, waitForText,
 } from './actions.ts'
 import type { ResolvedConfig } from './config.ts'
-import { needsLaunchConsent, type LaunchConsent } from './consent.ts'
+import { justificationOf, needsLaunchConsent, type LaunchConsent } from './consent.ts'
 import type { ChromeManager, SessionChrome } from './manager.ts'
 import { resolveUid, snapshotPage } from './snapshot.ts'
 import { appendShot } from './shots.ts'
@@ -69,6 +74,11 @@ async function resolveTarget(deps: ToolDeps, sessionId: string): Promise<{ sessi
  * the consent; a rejection leaves the session unconsented, so the next call
  * asks again.
  *
+ * The approval reason is the model's own `justification` argument. A call that
+ * would launch a browser without one is DENIED instead of asked: the user must
+ * never face an unexplained browser launch, and the denial text tells the model
+ * to retry through `chrome_open`, the one tool that advertises the field.
+ *
  * Deployments that compose no approval service (plain CLI / headless) have
  * nobody to ask, and the gate stands down there rather than failing the call.
  */
@@ -88,9 +98,17 @@ export function consentGate(ctx: Context, deps: ToolDeps): () => void {
       enabled: deps.config.confirmFirstLaunch,
     })
     if (!ask || ctx.get('approval') === undefined) return decision
+    const short = shortSessionId(sessionId)
+    const justification = justificationOf(exec.arguments)
+    if (justification === undefined) {
+      return {
+        kind: 'deny',
+        reason: `首次在会话 ${short} 中启动可见 Chrome 窗口前需要用户审批, 而审批理由必须由你给出. 请改用 chrome_open 工具重试, 并在 justification 参数里用一句话说明为什么这个会话需要可见的 Chrome 窗口.`,
+      }
+    }
     return {
       kind: 'ask',
-      reason: `首次在会话 ${shortSessionId(sessionId)} 中启动可见 Chrome 窗口, 同意后本会话内的浏览器操作不再询问.`,
+      reason: `首次在会话 ${short} 中启动可见 Chrome 窗口, 理由: ${justification}. 同意后本会话内的浏览器操作不再询问.`,
     }
   })
 }
@@ -125,10 +143,20 @@ type RegisterFn = (tool: ReturnType<typeof defineTool>) => void
 function openTool(deps: ToolDeps): ReturnType<typeof defineTool> {
   return defineTool({
     name: 'chrome_open',
-    description: '打开（或复用）本会话专属的可见 Chrome 窗口，并返回当前状态。窗口是真实的、用户可以看到并手动操作的浏览器；首次调用会自动启动 Chrome（惰性启动）。本会话首次启动窗口前会先向用户发起一次审批请求, 用户同意后本会话内不再询问; 被拒绝时不要反复重试, 应告知用户。可选参数 url 指定窗口打开后立即导航到的地址（缺省显示欢迎页）。窗口保持打开直到 chrome_close 或空闲超时。其他 chrome_* 工具在窗口未打开时同样会自动触发打开（并同样需要这次审批），因此本工具主要用于显式控制生命周期或指定初始地址。',
+    description: '打开（或复用）本会话专属的可见 Chrome 窗口，并返回当前状态。窗口是真实的、用户可以看到并手动操作的浏览器；首次调用会自动启动 Chrome（惰性启动）。本会话首次启动窗口前会先向用户发起一次审批请求, 此时弹窗展示的正是 justification 参数里的那句话, 所以必须认真写; 用户同意后本会话内不再询问, 被拒绝时不要反复重试, 应告知用户。其他 chrome_* 工具在窗口未打开时也能触发这次审批, 但它们不带 justification, 会被拒绝并提示改用本工具, 因此需要开窗时优先直接调用本工具。可选参数 url 指定窗口打开后立即导航到的地址（缺省显示欢迎页）。窗口保持打开直到 chrome_close 或空闲超时。',
     parameters: {
+      justification: {
+        type: 'string',
+        required: true,
+        description: '给用户看的一句话理由: 为什么这个会话需要可见的 Chrome 窗口。首次启动前的审批弹窗会原样展示这句话, 所以要写成用户据此就能决定同不同意的话, 例如 "打开内部管理后台核对订单状态"; 不要写 "用户要求打开浏览器" 这类没有信息量的空话。',
+      },
       url: { type: 'string', description: '打开后立即导航到的 URL（可省略协议，如 example.com）。缺省显示欢迎页。' },
     },
+    presentCall: (args) => ({
+      card: 'generic',
+      title: '打开可见 Chrome 窗口',
+      rawInput: args.url !== undefined && args.url !== '' ? { justification: args.justification, url: args.url } : { justification: args.justification },
+    }),
     output: {
       schema: {
         type: 'object',
@@ -162,6 +190,7 @@ function statusTool(deps: ToolDeps): ReturnType<typeof defineTool> {
     name: 'chrome_status',
     description: '查询本会话 Chrome 窗口的状态：是否运行、标签页列表（序号/标题/URL/当前选中）、启动与最近活动时间、最近截图。用于确认窗口状态、恢复上下文（例如不确定上次操作后页面处于哪个标签）或检查空闲关闭倒计时。',
     parameters: {},
+    presentCall: () => ({ card: 'generic', title: '查询 Chrome 窗口状态' }),
     output: {
       schema: {
         type: 'object',
@@ -189,6 +218,7 @@ function closeTool(deps: ToolDeps): ReturnType<typeof defineTool> {
     name: 'chrome_close',
     description: '关闭本会话的 Chrome 窗口（含所有标签页）。用户手动关窗后也无需再调用。关闭后再次调用任何 chrome_* 工具都会重新打开一个新窗口。适合在浏览器任务完成、需要释放资源或用户要求结束时调用。',
     parameters: {},
+    presentCall: () => ({ card: 'generic', title: '关闭 Chrome 窗口' }),
     output: {
       schema: {
         type: 'object',
@@ -221,6 +251,10 @@ function navigateTool(deps: ToolDeps): ReturnType<typeof defineTool> {
       url: { type: 'string', description: 'action=goto 时的目标地址（可省略协议，如 example.com）' },
       timeout: { type: 'integer', description: 'goto 超时毫秒数（默认 30000）' },
     },
+    presentCall: (args) => ({
+      card: 'generic',
+      title: args.action === 'goto' ? `导航到 ${args.url ?? ''}` : args.action === 'back' ? '后退一页' : args.action === 'forward' ? '前进一页' : '刷新页面',
+    }),
     output: {
       schema: {
         type: 'object',
@@ -269,6 +303,13 @@ function tabsTool(deps: ToolDeps): ReturnType<typeof defineTool> {
       index: { type: 'integer', description: 'close/select 时的标签页序号（list 输出中的 [N]；缺省=当前选中）' },
       url: { type: 'string', description: 'action=new 时新标签页的初始地址（缺省为空白页）' },
     },
+    presentCall: (args) => ({
+      card: 'generic',
+      title: args.action === 'list' ? '列出标签页'
+        : args.action === 'new' ? (args.url !== undefined && args.url !== '' ? `新建标签页: ${args.url}` : '新建标签页')
+          : args.action === 'select' ? `切换到标签页 [${args.index ?? '当前'}]`
+            : `关闭标签页 [${args.index ?? '当前'}]`,
+    }),
     output: {
       schema: {
         type: 'object',
@@ -315,6 +356,10 @@ function snapshotTool(deps: ToolDeps): ReturnType<typeof defineTool> {
     parameters: {
       verbose: { type: 'boolean', description: 'true=包含无语义节点（完整调试视图）；缺省=false 仅输出有名称/值的内容节点' },
     },
+    presentCall: (args) => ({
+      card: 'generic',
+      title: args.verbose === true ? '获取页面快照（完整调试视图）' : '获取页面快照',
+    }),
     output: {
       schema: {
         type: 'object',
@@ -349,6 +394,11 @@ function screenshotTool(deps: ToolDeps): ReturnType<typeof defineTool> {
       format: { type: 'string', enum: ['png', 'jpeg'], description: '图片格式（默认 png）' },
       quality: { type: 'integer', description: 'jpeg 质量 1-100（默认 85）' },
     },
+    presentCall: (args) => ({
+      card: 'generic',
+      title: args.elementUid !== undefined && args.elementUid !== '' ? `截取元素 ${args.elementUid}`
+        : args.fullPage === true ? '整页截图' : '视口截图',
+    }),
     output: {
       schema: {
         type: 'object',
@@ -444,6 +494,10 @@ function clickTool(deps: ToolDeps): ReturnType<typeof defineTool> {
       uid: { type: 'string', required: true, description: '元素 uid（来自 chrome_snapshot 的 [uid] 行）' },
       dblClick: { type: 'boolean', description: 'true=双击；缺省单击' },
     },
+    presentCall: (args) => ({
+      card: 'generic',
+      title: args.dblClick === true ? `双击元素 ${args.uid}` : `点击元素 ${args.uid}`,
+    }),
     output: {
       schema: {
         type: 'object',
@@ -478,10 +532,20 @@ function clickAtTool(deps: ToolDeps): ReturnType<typeof defineTool> {
     name: 'chrome_click_at',
     description: '在视口坐标 (x, y) 处点击（像素，原点=视口左上角）。用于点击快照中无法用 uid 定位的内容（如 canvas 图形、视频播放器），坐标通常来自 chrome_screenshot 图片观察。',
     parameters: {
+      description: {
+        type: 'string',
+        required: true,
+        description: '一句话说明这次点击打的是什么, 例如 "点击登录按钮"; 坐标本身看不出意图, 这句话才是用户能看懂的说明。',
+      },
       x: { type: 'integer', required: true, description: 'X 坐标（视口像素）' },
       y: { type: 'integer', required: true, description: 'Y 坐标（视口像素）' },
       dblClick: { type: 'boolean', description: 'true=双击；缺省单击' },
     },
+    presentCall: (args) => ({
+      card: 'generic',
+      title: args.dblClick === true ? `双击 ${args.description}` : `点击 ${args.description}`,
+      rawInput: `(${args.x}, ${args.y})`,
+    }),
     output: {
       schema: {
         type: 'object',
@@ -518,6 +582,11 @@ function fillTool(deps: ToolDeps): ReturnType<typeof defineTool> {
       uid: { type: 'string', required: true, description: '输入元素 uid（来自 chrome_snapshot）' },
       value: { type: 'string', required: true, description: '要填入的完整文本（会替换元素现有内容）' },
     },
+    presentCall: (args) => ({
+      card: 'generic',
+      title: `向元素 ${args.uid} 填入文本`,
+      rawInput: args.value,
+    }),
     output: {
       schema: {
         type: 'object',
@@ -552,8 +621,18 @@ function typeTool(deps: ToolDeps): ReturnType<typeof defineTool> {
     name: 'chrome_type',
     description: '在页面当前焦点处逐键输入文本（触发 keydown/keypress/input 事件）。先点击输入框获得焦点后使用；比 chrome_fill 更接近真实打字（适合搜索建议、快捷键响应等需要逐键事件的场景）。',
     parameters: {
+      description: {
+        type: 'string',
+        required: true,
+        description: '一句话说明这次输入在做什么, 例如 "在搜索框输入关键词"。',
+      },
       text: { type: 'string', required: true, description: '要逐键输入的文本' },
     },
+    presentCall: (args) => ({
+      card: 'generic',
+      title: `逐键输入: ${args.description}`,
+      rawInput: args.text,
+    }),
     output: {
       schema: {
         type: 'object',
@@ -584,6 +663,7 @@ function pressKeyTool(deps: ToolDeps): ReturnType<typeof defineTool> {
     parameters: {
       key: { type: 'string', required: true, description: '按键名：Enter/Escape/Tab/Backspace/ArrowUp/ArrowDown/ArrowLeft/ArrowRight/PageUp/PageDown/Home/End/F5 或单个字符（如 a、1）' },
     },
+    presentCall: (args) => ({ card: 'generic', title: `按下按键 ${args.key}` }),
     output: {
       schema: {
         type: 'object',
@@ -614,6 +694,7 @@ function hoverTool(deps: ToolDeps): ReturnType<typeof defineTool> {
     parameters: {
       uid: { type: 'string', required: true, description: '元素 uid（来自 chrome_snapshot）' },
     },
+    presentCall: (args) => ({ card: 'generic', title: `悬停到元素 ${args.uid}` }),
     output: {
       schema: {
         type: 'object',
@@ -652,6 +733,12 @@ function scrollTool(deps: ToolDeps): ReturnType<typeof defineTool> {
       amount: { type: 'integer', description: '滚动像素数（缺省=一屏高度）' },
       to: { type: 'string', enum: ['top', 'bottom'], description: '直接滚到 top 页首 / bottom 页尾（优先于 direction）' },
     },
+    presentCall: (args) => ({
+      card: 'generic',
+      title: args.to === 'top' ? '滚到页首'
+        : args.to === 'bottom' ? '滚到页尾'
+          : `${args.direction === 'up' ? '向上' : '向下'}滚动${args.amount !== undefined ? ` ${args.amount} 像素` : '一屏'}`,
+    }),
     output: {
       schema: {
         type: 'object',
@@ -683,8 +770,18 @@ function evaluateTool(deps: ToolDeps): ReturnType<typeof defineTool> {
     name: 'chrome_evaluate',
     description: '在当前标签页执行 JavaScript 表达式并返回结果。expression 是函数体（支持 await），返回值会被 JSON 序列化。用于读取页面数据（document.title、localStorage、元素属性）、调用页面内函数或实现快照覆盖不到的精确操作。安全提示：该工具与 shell 同权限，不要执行不可信代码。',
     parameters: {
+      description: {
+        type: 'string',
+        required: true,
+        description: '一句话说明这段脚本要做什么, 例如 "读取购物车里的商品名称列表"; 脚本本身没人愿意读, 这句话才是用户能看懂的说明。',
+      },
       expression: { type: 'string', required: true, description: 'JS 函数体，例如 return document.title；支持 async/await；return 的值即工具结果' },
     },
+    presentCall: (args) => ({
+      card: 'generic',
+      title: `执行脚本: ${args.description}`,
+      rawInput: args.expression,
+    }),
     output: {
       schema: {
         type: 'object',
@@ -723,6 +820,10 @@ function waitTool(deps: ToolDeps): ReturnType<typeof defineTool> {
       text: { type: 'string', description: '等待出现的文本（页面正文子串匹配）；缺省=只等待页面稳定' },
       timeout: { type: 'integer', description: '超时毫秒数（默认 15000）' },
     },
+    presentCall: (args) => ({
+      card: 'generic',
+      title: args.text !== undefined && args.text !== '' ? `等待文本出现: ${args.text}` : '等待页面稳定',
+    }),
     output: {
       schema: {
         type: 'object',

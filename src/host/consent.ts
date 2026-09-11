@@ -10,6 +10,11 @@
  *
  * Consent is deliberately memory-only and keyed by session id: it never
  * outlives the host process and never leaks from one session to another.
+ *
+ * The prompt's reason is never plugin boilerplate: it is the model's own
+ * `justification` argument (declared by `chrome_open`), and a pending launch
+ * that carries none is denied rather than asked, so the user never faces an
+ * unexplained browser launch.
  */
 
 /** Tools that never launch a window, so they never need launch consent. */
@@ -28,6 +33,23 @@ export class LaunchConsent {
   grant(sessionId: string): void {
     this.granted.add(sessionId)
   }
+}
+
+/**
+ * Read the model's one-sentence reason out of a pending call's arguments.
+ *
+ * Only `chrome_open` advertises the field, but the implicit parameter object
+ * stays open (validation checks advertised keys only), so this reader judges
+ * the value instead of trusting the tool name.
+ * @param args - the pending call's parsed arguments, however malformed.
+ * @returns the trimmed reason, or undefined when the call carries none.
+ */
+export function justificationOf(args: unknown): string | undefined {
+  if (typeof args !== 'object' || args === null) return undefined
+  const value = (args as { justification?: unknown }).justification
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : trimmed
 }
 
 /** What the gate needs to know about one pending tool call. */
