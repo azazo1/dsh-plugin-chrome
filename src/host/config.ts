@@ -65,8 +65,8 @@ export interface Config {
   /**
    * Absolute path of the local dotenv file holding the provider API key
    * (TYPESAFE_API_KEY / OPENROUTER_API_KEY). The key itself never becomes a
-   * config value. '' falls back to the upstream jev-browser-use config
-   * (`~/.config/jev-browser-use/config.json`) when that file exists.
+   * config value. '' falls back to <dataRoot>/jev-credentials.env inside
+   * the plugin's own data root (isolated per DSH home).
    */
   jevEnvFile?: string
   /** Maximum characters of one page state sent to the decision API. */
