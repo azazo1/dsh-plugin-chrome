@@ -141,9 +141,8 @@ TYPESAFE_API_KEY=tsk-your-key-here
     jevProvider: typesafe      # typesafe | openrouter
     jevModel: ''               # 留空 = provider 默认 (jev-latest)
     jevEnvFile: ''             # 存放 TYPESAFE_API_KEY / OPENROUTER_API_KEY 的 dotenv 文件
+    maxJevStateChars: 24000    # 单次决策调用发送的页面状态字符上限
 ```
-
-发送给 Jev 的页面状态硬上限 24000 字符 (沿用上游 jev-browser-use 的约定): 超出直接让本次运行报错并提示缩小任务, 而不是静默截断, 这样 Jev 与主模型看到的始终是同一份完整状态.
 
 数据目录（浏览器配置与截图）：`~/.dsh/data/dsh-plugin-chrome/sessions/<sessionId>/`（可用 `dataRoot` 覆盖）。
 

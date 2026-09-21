@@ -15,6 +15,7 @@ describe('resolveConfig', () => {
     expect(config.jevProvider).toBe('typesafe')
     expect(config.jevModel).toBe('')
     expect(config.jevEnvFile).toBe('')
+    expect(config.maxJevStateChars).toBe(24000)
   })
 
   it('keeps explicit values', () => {
@@ -30,11 +31,13 @@ describe('resolveConfig', () => {
       jevProvider: 'openrouter',
       jevModel: '~typesafe/jev-latest',
       jevEnvFile: '/tmp/creds.env',
+      maxJevStateChars: 12000,
     })
     expect(config.jevEnabled).toBe(true)
     expect(config.jevProvider).toBe('openrouter')
     expect(config.jevModel).toBe('~typesafe/jev-latest')
     expect(config.jevEnvFile).toBe('/tmp/creds.env')
+    expect(config.maxJevStateChars).toBe(12000)
   })
 })
 

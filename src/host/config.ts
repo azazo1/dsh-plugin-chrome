@@ -69,6 +69,8 @@ export interface Config {
    * the plugin's own data root (isolated per DSH home).
    */
   jevEnvFile?: string
+  /** Maximum characters of one page state sent to the decision API. */
+  maxJevStateChars?: number
 }
 
 /** Single source of truth for defaults (schema + resolver). */
@@ -89,6 +91,7 @@ const DEFAULTS = {
   jevProvider: 'typesafe',
   jevModel: '',
   jevEnvFile: '',
+  maxJevStateChars: 24000,
 } as const satisfies Record<keyof Config, string | number | boolean>
 
 /** Loader-validated config schema; defaults come from {@link DEFAULTS}. */
@@ -109,6 +112,7 @@ export const Config: z<Config> = z.object({
   jevProvider: z.union(['typesafe', 'openrouter']).default(DEFAULTS.jevProvider),
   jevModel: z.string().default(DEFAULTS.jevModel),
   jevEnvFile: z.string().default(DEFAULTS.jevEnvFile),
+  maxJevStateChars: z.number().min(1000).default(DEFAULTS.maxJevStateChars),
 })
 
 /** Resolved shape after the Loader applies schema defaults. */
@@ -135,5 +139,6 @@ export function resolveConfig(raw: Partial<Config> = {}): ResolvedConfig {
     jevProvider: raw.jevProvider ?? DEFAULTS.jevProvider,
     jevModel: raw.jevModel ?? DEFAULTS.jevModel,
     jevEnvFile: raw.jevEnvFile ?? DEFAULTS.jevEnvFile,
+    maxJevStateChars: raw.maxJevStateChars ?? DEFAULTS.maxJevStateChars,
   }
 }

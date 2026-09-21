@@ -64,6 +64,8 @@ interface Config {
    * the plugin's own data root (isolated per DSH home).
    */
   jevEnvFile?: string;
+  /** Maximum characters of one page state sent to the decision API. */
+  maxJevStateChars?: number;
 }
 /** Loader-validated config schema; defaults come from {@link DEFAULTS}. */
 declare const Config: z<Config>;

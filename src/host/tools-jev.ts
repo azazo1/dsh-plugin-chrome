@@ -68,7 +68,7 @@ function historyLine(index: number, entry: { choice: string; action: string; exe
 }
 
 /** Render one run outcome as model-facing Chinese text. */
-export function formatJevRun(outcome: JevRunResult): string {
+export function formatJevRun(outcome: JevRunResult, tailChars: number): string {
   const executed = outcome.history.filter((entry) => entry.executed).length
   const failed = outcome.history.filter((entry) => entry.reason === 'decision_error' || entry.reason === 'action_error').length
   const lines = [
@@ -85,9 +85,9 @@ export function formatJevRun(outcome: JevRunResult): string {
   } else {
     lines.push('Jev 未宣告完成: 请查看下方页面状态, 处理卡点后可用相同 goal 继续运行 (进度与历史已保留)。')
   }
-  // 与上游一致: 状态原样返回, 不做截断 (上游同样只以 24000 字符为硬上限并直接报错).
-  lines.push(`当前页面状态 (${outcome.state.length} 字符):`)
-  lines.push(outcome.state)
+  const tail = outcome.state.length > tailChars ? outcome.state.slice(-tailChars) : outcome.state
+  lines.push(`当前页面状态 (尾部 ${tail.length} 字符):`)
+  lines.push(tail)
   return lines.join('\n')
 }
 
@@ -183,7 +183,7 @@ function jevRunTool(deps: ToolDeps): ReturnType<typeof defineTool> {
         return {
           status: outcome.status,
           executed: outcome.history.filter((entry) => entry.executed).length,
-          text: formatJevRun(outcome),
+          text: formatJevRun(outcome, 4000),
         }
       })
     },
@@ -226,7 +226,7 @@ function jevWaitTool(deps: ToolDeps): ReturnType<typeof defineTool> {
         additionalProperties: false,
         properties: {
           matched: { type: 'boolean', required: true, description: '超时前条件是否满足' },
-          text: { type: 'string', required: true, description: '给模型的结果说明 (含当前完整页面状态)' },
+          text: { type: 'string', required: true, description: '给模型的结果说明 (含当前状态尾部)' },
         },
       },
       render: (_args, value) => [{ type: 'text', text: value.text }],
@@ -245,11 +245,12 @@ function jevWaitTool(deps: ToolDeps): ReturnType<typeof defineTool> {
           excludes: (args.excludes ?? []) as string[],
           timeoutMs: args.timeoutMs,
         }, exec.signal))
+        const tail = outcome.state.length > 2000 ? outcome.state.slice(-2000) : outcome.state
         return {
           matched: outcome.status === 'matched',
           text: outcome.status === 'matched'
-            ? `页面状态已满足 (${(outcome.elapsedMs / 1000).toFixed(1)}s)。当前状态 (${outcome.state.length} 字符):\n${outcome.state}`
-            : `等待超时 (${((args.timeoutMs ?? 45000) / 1000).toFixed(0)}s), 条件未满足。当前状态 (${outcome.state.length} 字符):\n${outcome.state}`,
+            ? `页面状态已满足 (${(outcome.elapsedMs / 1000).toFixed(1)}s)。当前状态尾部:\n${tail}`
+            : `等待超时 (${((args.timeoutMs ?? 45000) / 1000).toFixed(0)}s), 条件未满足。当前状态尾部:\n${tail}`,
         }
       })
     },
