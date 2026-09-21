@@ -11,11 +11,6 @@ describe('resolveConfig', () => {
     expect(config.maxSnapshotText).toBe(60000)
     expect(config.screencastFrameSkip).toBe(4)
     expect(config.confirmFirstLaunch).toBe(true)
-    expect(config.jevEnabled).toBe(false)
-    expect(config.jevProvider).toBe('typesafe')
-    expect(config.jevModel).toBe('')
-    expect(config.jevEnvFile).toBe('')
-    expect(config.maxJevStateChars).toBe(24000)
   })
 
   it('keeps explicit values', () => {
@@ -23,21 +18,6 @@ describe('resolveConfig', () => {
     expect(config.headless).toBe(true)
     expect(config.idleTimeoutMs).toBe(0)
     expect(config.maxTabs).toBe(4)
-  })
-
-  it('keeps explicit Jev settings', () => {
-    const config = resolveConfig({
-      jevEnabled: true,
-      jevProvider: 'openrouter',
-      jevModel: '~typesafe/jev-latest',
-      jevEnvFile: '/tmp/creds.env',
-      maxJevStateChars: 12000,
-    })
-    expect(config.jevEnabled).toBe(true)
-    expect(config.jevProvider).toBe('openrouter')
-    expect(config.jevModel).toBe('~typesafe/jev-latest')
-    expect(config.jevEnvFile).toBe('/tmp/creds.env')
-    expect(config.maxJevStateChars).toBe(12000)
   })
 })
 

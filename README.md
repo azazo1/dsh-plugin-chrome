@@ -16,7 +16,6 @@
 - [Features](#features)
 - [Install](#install)
 - [Usage](#usage)
-- [Jev delegation mode](#jev-delegation-mode)
 - [Configuration](#configuration)
 - [FAQ](#faq)
 - [Development](#development)
@@ -29,7 +28,6 @@
 - **Complete agent tool suite** (16 tools): `chrome_open` / `chrome_status` / `chrome_close` / `chrome_navigate` / `chrome_tabs` / `chrome_snapshot` / `chrome_screenshot` / `chrome_click` / `chrome_click_at` / `chrome_fill` / `chrome_type` / `chrome_press_key` / `chrome_hover` / `chrome_scroll` / `chrome_evaluate` / `chrome_wait`. `chrome_tabs` covers list / new / close / select, and snapshots, screenshots and clicks always act on the selected tab.
 - **Tool cards in plain words**: the tools whose arguments explain nothing (`chrome_evaluate` scripts, `chrome_click_at` coordinates, `chrome_type` keystrokes) require a `description` argument; the Web GUI's card summary takes the first string argument, so it reads "read the product list" or "click the login button" while the raw script or coordinates stay in the expanded card. All 16 tools also declare their card intent (title and salient argument) through `presentCall` for whichever DSH surface renders it.
 - **Accessibility-tree snapshots**: `chrome_snapshot` returns a compact a11y tree with stable element uids; clicks and fills target uids directly — far lighter than DOM dumps and robust against fragile selectors.
-- **Jev delegation (opt-in)**: `chrome_jev_run` hands a whole mechanical browser flow (clicks, toggles, scrolling, safe keys, reloads) to TypeSafe's ultra-cheap [Jev](https://docs.typesafe.ai/introduction) decision model ($0.042/1M input tokens) — one tool call runs up to 30 observe → decide → act rounds internally, so the main model spends no turn per click. The concept comes from [jev-browser-use](https://github.com/wy-coliney/jev-browser-use) (MIT); this plugin implements the same loop natively on its CDP stack. Off by default; see [Jev delegation mode](#jev-delegation-mode).
 - **Dual-channel screenshots**: `chrome_screenshot` sends the image into the model context (as an image block) AND saves it to the session's screenshot history shown in the panel — history entries keep title/URL/size metadata across restarts. (Running a text-only model? See the FAQ.)
 - **Security-minded**: CDP never exposes a fixed port; the Web API rejects cross-site requests (Sec-Fetch-Site) and whitelist-validates sessionId; browser data is isolated per session.
 - **First launch asks you first**: each session's first browser launch goes through one approval prompt (the native DSH approval channel, answered in the Web GUI); once allowed, every later `chrome_*` call of that session runs without asking. The prompt's text is the model's own `chrome_open.justification` (a required argument), so you never read a canned sentence instead of a reason; another tool that would launch the browser implicitly without a reason fails and is told to retry through `chrome_open`. A rejection starts nothing and the next call asks again. Deployments without an approval channel (plain CLI / headless) skip the step.
@@ -78,44 +76,6 @@ The agent will: `chrome_open` → `chrome_navigate` → `chrome_screenshot` (see
 - **Approval on first launch**: any `chrome_*` call that would really start the browser (including the implicit launch of `chrome_navigate` / `chrome_snapshot` and friends) asks the user once per session before it runs; after the grant the window starts, the session is remembered as consented, and later calls pass straight through. An already open window is reused without asking. The grant lives in memory only, is scoped to one session, and dies with the host process; set `confirmFirstLaunch: false` to switch the whole thing off.
 - **The reason comes from the model**: `chrome_open.justification` is a required argument, and the approval prompt shows that sentence verbatim, so what you read is "why this session needs a browser" rather than plugin boilerplate. An implicit launcher that carries no reason does not prompt at all: it fails with an error telling the model to retry through `chrome_open`, so no launch request ever reaches you without a stated purpose.
 
-## Jev delegation mode
-
-Repetitive page workflows (dashboards, settings, reports) burn a main-model turn on every click. Jev mode moves the whole mechanical loop into one tool call: the plugin captures the accessibility state, a cheap Jev decision model picks the next action, CDP executes it, and the loop repeats — up to 30 steps per call, with the main model only verifying the result afterward. The design mirrors [jev-browser-use](https://github.com/wy-coliney/jev-browser-use); the protocol (state format, endpoints, contracts) stays compatible with it.
-
-### Tools
-
-| Tool | Purpose |
-| --- | --- |
-| `chrome_jev_run` | Run one bounded decide/act loop: `goal` + `allowedOrigins` + `controls` (named clicks, scrolls, safe keys, reload) and/or a discovery `policy`. Returns `needs_verification` (Jev believes the goal is met — verify independently) or a handoff status (`low_confidence`, `blocked`, `no_progress`, `loading_timeout`, `decision_error`, `action_error`, `budget`, `step_limit`). Execution history is remembered per session across calls; pass `reset: true` to clear it. |
-| `chrome_jev_wait` | Bounded deterministic wait: poll the accessibility state until `includes` texts appear and `excludes` texts disappear (no Jev calls spent). |
-
-### What Jev never does
-
-No text entry, no screenshots/visual judgment, no selector/coordinate/URL invention, no arbitrary keys (whitelist only: Enter/Escape/Tab/Shift+Tab/PageUp/PageDown/Home/End). The main model keeps typing (`chrome_fill`/`chrome_type`), image work, and final verification; it can resume the same Jev session afterward. Origin allowlist violations abort the loop immediately. `denyNames` / `requireCodexNames` policy lists keep consequential controls (payments, deletions, publishing) in the main model's hands.
-
-### Setup
-
-1. Get Jev access: a TypeSafe API key, or an OpenRouter key for the Decisions endpoint.
-2. Store the key in a local dotenv file, e.g. `~/.config/jev-browser-use/credentials.env`:
-
-```shell
-TYPESAFE_API_KEY=tsk-your-key-here
-```
-
-3. Enable the mode in the profile's `cordis.patch.yml`:
-
-```yaml
-- id: dsh-plugin-chrome
-  config:
-    jevEnabled: true
-    jevProvider: typesafe        # or openrouter
-    jevEnvFile: ~/.config/jev-browser-use/credentials.env
-```
-
-Keys live only in the dotenv file — never in `config.json`, chat, or logs. If the upstream jev-browser-use skill is already configured (`~/.config/jev-browser-use/config.json`), this plugin picks up its `envFile`/`provider`/`model` automatically when `jevEnvFile` is empty; `jevModel: ''` selects the provider default (`jev-latest`).
-
-Note: `chrome_jev_run` sends the page's accessibility text to the configured provider. Enable the mode only for sessions whose pages you accept sharing with that endpoint, and prefer synthetic/public content for sensitive flows.
-
 ## Configuration
 
 Override the plugin row in the profile's `cordis.patch.yml` (config is replaced wholesale):
@@ -134,12 +94,6 @@ Override the plugin row in the profile's `cordis.patch.yml` (config is replaced 
     maxTabs: 16
     confirmFirstLaunch: true   # one approval prompt before a session's first launch (false = never ask)
     extraArgs: ''              # extra Chrome launch flags
-    # Jev delegation (see "Jev delegation mode"):
-    jevEnabled: false          # register chrome_jev_run / chrome_jev_wait
-    jevProvider: typesafe      # typesafe | openrouter
-    jevModel: ''               # '' = provider default (jev-latest)
-    jevEnvFile: ''             # dotenv file with TYPESAFE_API_KEY / OPENROUTER_API_KEY
-    maxJevStateChars: 24000    # max page-state chars sent per decision call
 ```
 
 Data directory (browser profiles & screenshots): `~/.dsh/data/dsh-plugin-chrome/sessions/<sessionId>/` (override with `dataRoot`).
@@ -154,9 +108,6 @@ Data directory (browser profiles & screenshots): `~/.dsh/data/dsh-plugin-chrome/
 - **Login state**: each session uses an isolated profile, so logins don't carry over from your daily browser — that's by design. To log in somewhere, let the agent complete the login (it persists for the session).
 - **Chrome stays open after DSH is killed**: the orphan window is adopted on the next session call (or close it by hand); a clean DSH shutdown closes its windows.
 - **Screenshots stop a text-only model from responding**: `chrome_screenshot` delivers the picture as an image block into the conversation history. If the session's model does not accept images, every following turn is rejected with `UNSUPPORTED_CONTENT: does not accept image input` and the session no longer responds — retrying doesn't help. Use a vision-capable model for sessions that screenshot, or avoid `chrome_screenshot` there.
-- **`chrome_jev_run` says Jev tools are not registered**: the mode is off by default — set `jevEnabled: true` in the plugin config and restart DSH.
-- **`chrome_jev_run` reports a missing credential**: the dotenv file pointed to by `jevEnvFile` (or the upstream `~/.config/jev-browser-use/config.json`) does not exist or lacks `TYPESAFE_API_KEY` / `OPENROUTER_API_KEY`. Fix the file; do not paste keys into chat or config.
-- **`chrome_jev_run` returns `needs_verification`**: Jev believes the goal is met based on accessibility text only — independently verify with `chrome_snapshot` / `chrome_screenshot` before claiming success.
 - **Install blocked by pnpm (strict-dep-builds)**: add `dsh-plugin-chrome: true` to `allowBuilds` in the profile's `pnpm-workspace.yaml` and retry the install.
 
 ## Development

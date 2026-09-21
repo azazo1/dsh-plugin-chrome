@@ -20,7 +20,6 @@ import { resolveDataRoot } from './browser.ts'
 import { LaunchConsent } from './consent.ts'
 import { ChromeManager } from './manager.ts'
 import { registerTools, type ToolDeps } from './tools.ts'
-import { JevSessionStore } from './jev/engine.ts'
 import { installApi } from './api.ts'
 
 export const name = 'dsh-plugin-chrome'
@@ -44,8 +43,6 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
   // One consent record for the whole plugin instance: it holds the sessions
   // whose user already approved launching a window (see ./consent.ts).
   const consent = new LaunchConsent()
-  // Jev loop progress per session (history + metrics); cleared on unload.
-  const jevSessions = new JevSessionStore()
 
   // Optional attachment service (image blocks for the model). Probed per
   // call through ctx.get so tool registration never waits on a service
@@ -54,7 +51,6 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
     manager,
     config,
     consent,
-    jevSessions,
     attachImage: async (data, mediaType) => {
       const attachments = ctx.get('attachments') as { saveImage(input: { data: Uint8Array; mediaType: typeof mediaType }): Promise<import('@deepseek-ai/dsh-attachment').ImageAttachmentRef> } | undefined
       if (attachments === undefined) throw new Error('attachment service unavailable')
@@ -71,11 +67,9 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
     webCtx.effect(() => installApi(webCtx, manager), 'dsh-plugin-chrome: web api')
   })
 
-  // Plugin teardown: stop the idle reaper, close every session window, and
-  // drop the Jev loop memories.
+  // Plugin teardown: stop the idle reaper and close every session window.
   ctx.effect(() => () => {
     manager.dispose()
     void manager.closeAll()
-    jevSessions.dispose()
   }, 'dsh-plugin-chrome: chrome manager')
 }

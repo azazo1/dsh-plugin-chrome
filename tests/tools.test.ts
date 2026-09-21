@@ -12,16 +12,10 @@ import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import type { JsonValue, ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { resolveConfig } from '../src/host/config.ts'
 import { LaunchConsent } from '../src/host/consent.ts'
-import { JevSessionStore } from '../src/host/jev/engine.ts'
 import { registerTools, type ToolDeps } from '../src/host/tools.ts'
 
 /** Register the suite on a stub context and index the definitions by name. */
 function suite(): Map<string, ToolDefinition> {
-  return suiteWithConfig(false)
-}
-
-/** Register with a given jevEnabled value. */
-function suiteWithConfig(jevEnabled: boolean): Map<string, ToolDefinition> {
   const registered = new Map<string, ToolDefinition>()
   const ctx = {
     on: (): (() => void) => () => {},
@@ -34,9 +28,8 @@ function suiteWithConfig(jevEnabled: boolean): Map<string, ToolDefinition> {
   } as unknown as Context
   const deps = {
     manager: {},
-    config: resolveConfig({ jevEnabled }),
+    config: resolveConfig({}),
     consent: new LaunchConsent(),
-    jevSessions: new JevSessionStore(),
   } as unknown as ToolDeps
   registerTools(ctx, deps)
   return registered
@@ -61,27 +54,6 @@ describe('chrome 工具的参数契约', () => {
     const open = suite().get('chrome_open')
     expect(open).toBeDefined()
     expect(requiredNames(open as ToolDefinition)).toContain('justification')
-  })
-
-  it('jevEnabled=false 时不注册 Jev 工具, =true 时注册且理由必填', () => {
-    const off = suiteWithConfig(false)
-    expect(off.size).toBe(16)
-    expect(off.has('chrome_jev_run')).toBe(false)
-    const on = suiteWithConfig(true)
-    expect(on.size).toBe(18)
-    expect(requiredNames(on.get('chrome_jev_run') as ToolDefinition)).toEqual(
-      expect.arrayContaining(['goal', 'justification', 'allowedOrigins']),
-    )
-    expect(requiredNames(on.get('chrome_jev_wait') as ToolDefinition)).toContain('allowedOrigins')
-  })
-
-  it('chrome_jev_run 的卡片用 goal 做标题', () => {
-    const run = suiteWithConfig(true).get('chrome_jev_run') as ToolDefinition
-    const view = run.presentCall?.({
-      goal: '展开通知设置', justification: '重复点击委托', allowedOrigins: ['https://example.com'],
-    })
-    expect(JSON.stringify(view)).toContain('展开通知设置')
-    expect(JSON.stringify(view)).toContain('https://example.com')
   })
 
   it('参数不直观的工具要求逐调用 description', () => {

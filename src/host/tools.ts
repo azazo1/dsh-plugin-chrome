@@ -27,8 +27,6 @@ import { justificationOf, needsLaunchConsent, type LaunchConsent } from './conse
 import type { ChromeManager, SessionChrome } from './manager.ts'
 import { resolveUid, snapshotPage } from './snapshot.ts'
 import { appendShot } from './shots.ts'
-import { JevSessionStore } from './jev/engine.ts'
-import { registerJevTools } from './tools-jev.ts'
 import type { ChromeStatus, PageInfo, ScreenshotEntry } from '../shared/contract.ts'
 import { shortSessionId } from '../shared/contract.ts'
 
@@ -38,8 +36,6 @@ export interface ToolDeps {
   config: ResolvedConfig
   /** Session-scoped memory of the user's approval to launch a window. */
   consent: LaunchConsent
-  /** Session-scoped Jev loop progress (used when jevEnabled is on). */
-  jevSessions: JevSessionStore
   /**
    * Attach one image to the model stream (via ctx.attachments). Absent in
    * surfaces without the attachment service — the tool then reports the
@@ -49,7 +45,7 @@ export interface ToolDeps {
 }
 
 /** Extract the calling agent's session id (tools only run for an agent). */
-export function sessionIdOf(exec: ToolRunContext): string {
+function sessionIdOf(exec: ToolRunContext): string {
   const sessionId = exec.agent?.session?.id
   if (typeof sessionId !== 'string' || sessionId === '') {
     throw new Error('chrome_* 工具只能在 Agent 会话中调用（缺少发起会话）。')
@@ -58,7 +54,7 @@ export function sessionIdOf(exec: ToolRunContext): string {
 }
 
 /** Resolve the session window and its control page (launching when needed). */
-export async function resolveTarget(deps: ToolDeps, sessionId: string): Promise<{ session: SessionChrome; pageIndex: number }> {
+async function resolveTarget(deps: ToolDeps, sessionId: string): Promise<{ session: SessionChrome; pageIndex: number }> {
   const session = await deps.manager.getOrLaunch(sessionId)
   // Reaching this point means the launch was either approved by the user or
   // served an already open window: either way the session is consented, so
@@ -881,10 +877,7 @@ function waitTool(deps: ToolDeps): ReturnType<typeof defineTool> {
   })
 }
 
-/**
- * Register the full tool suite. When `config.jevEnabled` is on, the Jev
- * delegation tools register too (they remove cleanly with the same disposer).
- */
+/** Register the full tool suite. */
 export function registerTools(ctx: Context, deps: ToolDeps): () => void {
   const disposers: Array<() => void> = []
   const register: RegisterFn = (tool) => {
@@ -907,7 +900,6 @@ export function registerTools(ctx: Context, deps: ToolDeps): () => void {
   register(scrollTool(deps))
   register(evaluateTool(deps))
   register(waitTool(deps))
-  disposers.push(registerJevTools(ctx, deps))
   return () => {
     for (const dispose of disposers) dispose()
   }

@@ -24,7 +24,7 @@
     "build": "tsdown",
     "watch": "tsdown --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
-    "test": "vitest run --pool=threads tests/snapshot.test.ts tests/config.test.ts tests/consent.test.ts tests/tools.test.ts tests/shots.test.ts tests/actions.test.ts tests/manager.test.ts tests/api.test.ts tests/jev-decide.test.ts tests/jev-actions.test.ts tests/jev-state.test.ts tests/jev-engine.test.ts",
+    "test": "vitest run --pool=threads tests/snapshot.test.ts tests/config.test.ts tests/consent.test.ts tests/tools.test.ts tests/shots.test.ts tests/actions.test.ts tests/manager.test.ts tests/api.test.ts",
     "test:e2e": "vitest run --pool=threads tests/e2e-chrome.test.ts"
   },
   "license": "MIT",
