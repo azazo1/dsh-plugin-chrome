@@ -52,6 +52,25 @@ export interface Config {
    * nobody to ask, so the gate stands down there instead of failing the call.
    */
   confirmFirstLaunch?: boolean
+  /**
+   * Enable the Jev delegation tools (`chrome_jev_run` / `chrome_jev_wait`).
+   * Default false: the loop sends page accessibility text to an external
+   * API, so it must be switched on deliberately.
+   */
+  jevEnabled?: boolean
+  /** Jev decision provider. */
+  jevProvider?: 'typesafe' | 'openrouter'
+  /** Jev model id; '' selects the provider default (`jev-latest`). */
+  jevModel?: string
+  /**
+   * Absolute path of the local dotenv file holding the provider API key
+   * (TYPESAFE_API_KEY / OPENROUTER_API_KEY). The key itself never becomes a
+   * config value. '' falls back to the upstream jev-browser-use config
+   * (`~/.config/jev-browser-use/config.json`) when that file exists.
+   */
+  jevEnvFile?: string
+  /** Maximum characters of one page state sent to the decision API. */
+  maxJevStateChars?: number
 }
 
 /** Single source of truth for defaults (schema + resolver). */
@@ -68,6 +87,11 @@ const DEFAULTS = {
   maxSnapshotText: 60000,
   maxTabs: 16,
   confirmFirstLaunch: true,
+  jevEnabled: false,
+  jevProvider: 'typesafe',
+  jevModel: '',
+  jevEnvFile: '',
+  maxJevStateChars: 24000,
 } as const satisfies Record<keyof Config, string | number | boolean>
 
 /** Loader-validated config schema; defaults come from {@link DEFAULTS}. */
@@ -84,6 +108,11 @@ export const Config: z<Config> = z.object({
   maxSnapshotText: z.number().min(1000).default(DEFAULTS.maxSnapshotText),
   maxTabs: z.number().min(1).default(DEFAULTS.maxTabs),
   confirmFirstLaunch: z.boolean().default(DEFAULTS.confirmFirstLaunch),
+  jevEnabled: z.boolean().default(DEFAULTS.jevEnabled),
+  jevProvider: z.union(['typesafe', 'openrouter']).default(DEFAULTS.jevProvider),
+  jevModel: z.string().default(DEFAULTS.jevModel),
+  jevEnvFile: z.string().default(DEFAULTS.jevEnvFile),
+  maxJevStateChars: z.number().min(1000).default(DEFAULTS.maxJevStateChars),
 })
 
 /** Resolved shape after the Loader applies schema defaults. */
@@ -106,5 +135,10 @@ export function resolveConfig(raw: Partial<Config> = {}): ResolvedConfig {
     maxSnapshotText: raw.maxSnapshotText ?? DEFAULTS.maxSnapshotText,
     maxTabs: raw.maxTabs ?? DEFAULTS.maxTabs,
     confirmFirstLaunch: raw.confirmFirstLaunch ?? DEFAULTS.confirmFirstLaunch,
+    jevEnabled: raw.jevEnabled ?? DEFAULTS.jevEnabled,
+    jevProvider: raw.jevProvider ?? DEFAULTS.jevProvider,
+    jevModel: raw.jevModel ?? DEFAULTS.jevModel,
+    jevEnvFile: raw.jevEnvFile ?? DEFAULTS.jevEnvFile,
+    maxJevStateChars: raw.maxJevStateChars ?? DEFAULTS.maxJevStateChars,
   }
 }

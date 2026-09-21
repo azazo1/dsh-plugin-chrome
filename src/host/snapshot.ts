@@ -24,8 +24,8 @@ export interface SnapshotResult {
   truncated: boolean
 }
 
-/** CDP AXNode subset the snapshot reads. */
-interface AxNode {
+/** Raw CDP AX node subset shared by the uid snapshot and the Jev state. */
+export interface AxNode {
   nodeId: string
   ignored: boolean
   backendDOMNodeId?: number
@@ -37,7 +37,7 @@ interface AxNode {
 }
 
 /** Textual value of an AX value field (form fields, links, headings). */
-function axValueText(value: unknown): string {
+export function axValueText(value: unknown): string {
   if (typeof value === 'string') return value
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   if (value !== undefined && value !== null && typeof value === 'object' && 'value' in (value as Record<string, unknown>)) {
@@ -54,7 +54,7 @@ function displayName(name: string): string {
 }
 
 /** Tree-shaped AX node (children materialized from the flat CDP list). */
-interface AxTree extends AxNode {
+export interface AxTree extends AxNode {
   children: AxTree[]
 }
 
@@ -62,7 +62,7 @@ interface AxTree extends AxNode {
  * Build the tree from the flat AX node list and walk it into text lines,
  * minting uids along the way.
  */
-function buildTree(nodes: readonly AxNode[]): Map<string, AxTree> {
+export function buildAxTree(nodes: readonly AxNode[]): Map<string, AxTree> {
   const byId = new Map<string, AxTree>()
   for (const node of nodes) {
     byId.set(node.nodeId, { ...node, children: [] })
@@ -77,7 +77,7 @@ function buildTree(nodes: readonly AxNode[]): Map<string, AxTree> {
 }
 
 /** True when the node carries nothing a user or model would care about. */
-function isUninteresting(node: AxTree): boolean {
+export function isUninteresting(node: AxTree): boolean {
   const name = axValueText(node.name).trim()
   const value = axValueText(node.value)
   const role = node.role?.value ?? ''
@@ -121,6 +121,21 @@ function walkTree(
 }
 
 /**
+ * Read the page's raw accessibility tree through CDP (the same source
+ * chrome-devtools-mcp builds its TextSnapshot on).
+ */
+export async function fetchAxNodes(page: Page): Promise<AxNode[]> {
+  const session = await page.target().createCDPSession()
+  try {
+    await session.send('Accessibility.enable')
+    const result = await session.send('Accessibility.getFullAXTree')
+    return result.nodes as AxNode[]
+  } finally {
+    await session.detach().catch(() => {})
+  }
+}
+
+/**
  * Capture the current page's a11y snapshot.
  * @param page - the control target.
  * @param pageIndex - tab index (uid prefix, keeps multi-tab uids distinct).
@@ -131,16 +146,8 @@ export async function snapshotPage(page: Page, pageIndex: number, options: {
   verbose?: boolean
   maxText: number
 }): Promise<SnapshotResult> {
-  const session = await page.target().createCDPSession()
-  let nodes: AxNode[]
-  try {
-    await session.send('Accessibility.enable')
-    const result = await session.send('Accessibility.getFullAXTree')
-    nodes = result.nodes as AxNode[]
-  } finally {
-    await session.detach().catch(() => {})
-  }
-  const byId = buildTree(nodes)
+  const nodes = await fetchAxNodes(page)
+  const byId = buildAxTree(nodes)
   const roots = nodes
     .filter((node) => node.parentId === undefined || !byId.has(node.parentId))
     .map((node) => byId.get(node.nodeId))

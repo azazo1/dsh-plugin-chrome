@@ -47,6 +47,25 @@ interface Config {
    * nobody to ask, so the gate stands down there instead of failing the call.
    */
   confirmFirstLaunch?: boolean;
+  /**
+   * Enable the Jev delegation tools (`chrome_jev_run` / `chrome_jev_wait`).
+   * Default false: the loop sends page accessibility text to an external
+   * API, so it must be switched on deliberately.
+   */
+  jevEnabled?: boolean;
+  /** Jev decision provider. */
+  jevProvider?: 'typesafe' | 'openrouter';
+  /** Jev model id; '' selects the provider default (`jev-latest`). */
+  jevModel?: string;
+  /**
+   * Absolute path of the local dotenv file holding the provider API key
+   * (TYPESAFE_API_KEY / OPENROUTER_API_KEY). The key itself never becomes a
+   * config value. '' falls back to the upstream jev-browser-use config
+   * (`~/.config/jev-browser-use/config.json`) when that file exists.
+   */
+  jevEnvFile?: string;
+  /** Maximum characters of one page state sent to the decision API. */
+  maxJevStateChars?: number;
 }
 /** Loader-validated config schema; defaults come from {@link DEFAULTS}. */
 declare const Config: z<Config>;
