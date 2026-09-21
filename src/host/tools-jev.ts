@@ -11,51 +11,29 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
-import { homedir } from 'node:os'
-import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { JevSessionStore, JevAbortedError, run, waitForState } from './jev/engine.ts'
 import { providerRoute } from './jev/providers.ts'
 import { validateControl } from './jev/actions.ts'
-import type { JevControl, JevCredentials, JevPolicy, JevProvider, JevRunResult } from './jev/types.ts'
+import type { JevControl, JevCredentials, JevPolicy, JevRunResult } from './jev/types.ts'
 import type { ResolvedConfig } from './config.ts'
-import type { ToolDeps } from './tools.ts'
+import { effectiveConfig, type ToolDeps } from './tools.ts'
 import { resolveTarget, sessionIdOf } from './tools.ts'
-
-/** Standard config location of the upstream jev-browser-use skill. */
-const UPSTREAM_CONFIG = join(homedir(), '.config', 'jev-browser-use', 'config.json')
-
-/** Upstream config file shape (no credential — only a path to one). */
-interface UpstreamJevConfig {
-  envFile?: unknown
-  provider?: unknown
-  model?: unknown
-}
 
 /**
  * Resolve which credentials the loop uses: an explicit `jevEnvFile` wins;
- * otherwise the upstream jev-browser-use config supplies envFile/provider/
- * model, so an existing jev-browser-use installation works unconfigured.
- * The API key itself always stays inside the referenced dotenv file.
+ * otherwise fall back to `<dataRoot>/jev-credentials.env` inside the
+ * plugin's own data root (isolated per DSH home — a private/test instance
+ * never touches the user's global ~/.config). The API key itself always
+ * stays inside the referenced dotenv file.
  */
 export async function resolveJevCredentials(config: ResolvedConfig): Promise<JevCredentials> {
   if (config.jevEnvFile.trim() !== '') {
     return { envFile: config.jevEnvFile, provider: config.jevProvider, model: config.jevModel }
   }
-  let parsed: UpstreamJevConfig
-  try {
-    parsed = JSON.parse(await readFile(UPSTREAM_CONFIG, 'utf8')) as UpstreamJevConfig
-  } catch {
-    throw new Error('未配置 Jev 凭据: 请在插件配置中设置 jevEnvFile (指向包含 API key 的本地 dotenv 文件), 或安装 jev-browser-use 的标准配置 (~/.config/jev-browser-use/config.json)。')
-  }
-  const envFile = typeof parsed.envFile === 'string' ? parsed.envFile : ''
-  if (envFile === '') {
-    throw new Error(`Jev 配置文件 ${UPSTREAM_CONFIG} 缺少 envFile 字段, 无法定位凭据文件。`)
-  }
-  const provider: JevProvider = parsed.provider === 'openrouter' ? 'openrouter' : 'typesafe'
-  const model = typeof parsed.model === 'string' ? parsed.model : ''
-  return { envFile, provider, model }
+  const fallback = join(config.dataRoot, 'jev-credentials.env')
+  return { envFile: fallback, provider: config.jevProvider, model: config.jevModel }
 }
 
 /** Normalize one allowlist entry into a URL origin (`example.com` works). */
@@ -176,7 +154,7 @@ function jevRunTool(deps: ToolDeps): ReturnType<typeof defineTool> {
       if (exec.signal.aborted) throw new Error('操作已取消。')
       const sessionId = sessionOf(exec)
       const { session } = await resolveTarget(deps, sessionId)
-      const credentials = await resolveJevCredentials(deps.config)
+      const credentials = await resolveJevCredentials(effectiveConfig(deps))
       const controls = (args.controls ?? []) as unknown as JevControl[]
       for (const control of controls) {
         if (!validateControl(control)) throw new Error('controls 中存在不合法的动作 (press 仅允许 Enter/Escape/Tab/Shift+Tab/PageUp/PageDown/Home/End, scroll amount 为 1-5, click 需要非空 name)。')
@@ -279,15 +257,53 @@ function jevWaitTool(deps: ToolDeps): ReturnType<typeof defineTool> {
   })
 }
 
-/** Register the Jev tools (no-op unless the deployment enabled them). */
+/** Register the Jev tools. Visibility follows the live settings toggle
+ * (falling back to the profile config), checked on every model tool listing
+ * and call through the registry's own evaluation. */
 export function registerJevTools(ctx: Context, deps: ToolDeps): () => void {
-  if (deps.config.jevEnabled !== true) return () => {}
-  const disposers: Array<() => void> = []
-  disposers.push(ctx.tools.register(jevRunTool(deps)))
-  disposers.push(ctx.tools.register(jevWaitTool(deps)))
-  return () => {
-    for (const dispose of disposers) dispose()
+  const runTool = jevRunTool(deps)
+  const waitTool = jevWaitTool(deps)
+  const registrations = new Map<ReturnType<typeof defineTool>, () => void>()
+  const sync = (): void => {
+    const enabled = deps.readSettings?.()?.jevEnabled ?? deps.config.jevEnabled
+    if (enabled === true && registrations.size === 0) {
+      registrations.set(runTool, ctx.tools.register(runTool))
+      registrations.set(waitTool, ctx.tools.register(waitTool))
+    } else if (enabled !== true && registrations.size > 0) {
+      for (const dispose of registrations.values()) dispose()
+      registrations.clear()
+    }
   }
+  sync()
+  // Re-evaluate on any settings commit so the toggle takes effect live.
+  const stopWatch = deps.readSettings === undefined ? () => {} : watchSettings(sync)
+  return () => {
+    stopWatch()
+    for (const dispose of registrations.values()) dispose()
+    registrations.clear()
+  }
+}
+
+/**
+ * Observe the settings scope for changes to `jevEnabled`. The host plugin
+ * exposes the watcher through a per-plugin callback registered by index.ts.
+ */
+const settingsWatchers = new Set<() => void>()
+
+/** Subscribe to settings commits (no-op when the settings service is absent). */
+export function onSettingsCommit(callback: () => void): () => void {
+  settingsWatchers.add(callback)
+  return () => settingsWatchers.delete(callback)
+}
+
+/** Fire the watcher set from index.ts's settings registration. */
+export function notifySettingsCommit(): void {
+  for (const watcher of [...settingsWatchers]) watcher()
+}
+
+/** Watch settings commits and invoke `onChange` when one arrives. */
+function watchSettings(onChange: () => void): () => void {
+  return onSettingsCommit(onChange)
 }
 
 /** Exposed for tests/docs: provider default endpoints. */

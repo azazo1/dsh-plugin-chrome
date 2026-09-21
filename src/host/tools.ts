@@ -41,11 +41,28 @@ export interface ToolDeps {
   /** Session-scoped Jev loop progress (used when jevEnabled is on). */
   jevSessions: JevSessionStore
   /**
+   * Live settings read (the Web GUI configuration page's user layer).
+   * Absent in bare surfaces without the settings service — the profile
+   * config then stays the only source.
+   */
+  readSettings?: () => Partial<ResolvedConfig> | undefined
+  /**
    * Attach one image to the model stream (via ctx.attachments). Absent in
    * surfaces without the attachment service — the tool then reports the
    * saved file path instead of an inline image.
    */
   attachImage?: (data: Uint8Array, mediaType: 'image/png' | 'image/jpeg') => Promise<ImageAttachmentRef>
+}
+
+/**
+ * Effective config for one tool call: the settings user layer overrides the
+ * profile config field by field, so a configuration-page toggle wins over
+ * the yaml without a restart for the Jev tools (window-shape fields still
+ * take effect on the next launch).
+ */
+export function effectiveConfig(deps: ToolDeps): ResolvedConfig {
+  const user = deps.readSettings?.() ?? {}
+  return { ...deps.config, ...Object.fromEntries(Object.entries(user).filter(([, value]) => value !== undefined)) } as ResolvedConfig
 }
 
 /** Extract the calling agent's session id (tools only run for an agent). */
