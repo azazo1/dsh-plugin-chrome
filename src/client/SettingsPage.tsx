@@ -102,7 +102,7 @@ export function SettingsPage(props: SettingsPageProps) {
       }, createElement('input', {
         type: 'text',
         value: jevEnvFile ?? '',
-        placeholder: '~/.dsh/data/dsh-plugin-chrome/jev-credentials.env',
+        placeholder: '~/.config/jev-browser-use/credentials.env',
         disabled: !writable,
         onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
           void scope.set(SETTINGS_FIELDS.jevEnvFile, event.currentTarget.value)

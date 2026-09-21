@@ -61,7 +61,7 @@ export function parseEnvFile(text: string): Record<string, string> {
 export function readCredential(envFile: string, provider: JevProvider): string {
   const route = providerRoute(provider)
   if (envFile.trim() === '') {
-    throw new Error(`未配置 Jev 凭据文件: 请在插件配置中将 jevEnvFile 指向包含 ${route.keyName} 的本地 dotenv 文件 (留空则默认 <dataRoot>/jev-credentials.env).`)
+    throw new Error(`未配置 Jev 凭据文件: 请在插件配置中将 jevEnvFile 指向包含 ${route.keyName} 的本地 dotenv 文件, 或安装 jev-browser-use 的标准配置 (${UPSTREAM_CONFIG_PATH}).`)
   }
   let text: string
   try {
@@ -76,6 +76,9 @@ export function readCredential(envFile: string, provider: JevProvider): string {
   }
   return key
 }
+
+/** Standard config location of the upstream jev-browser-use skill. */
+export const UPSTREAM_CONFIG_PATH = '~/.config/jev-browser-use/config.json'
 
 /** One decision: strict schema validation, then a trusted choice. */
 export async function decide(input: DecideInput): Promise<JevDecision> {

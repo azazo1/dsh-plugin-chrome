@@ -96,25 +96,23 @@ Agent 会：`chrome_open` → `chrome_navigate` → `chrome_screenshot`（看图
 ### 开启步骤
 
 1. 获取 Jev 访问权限: TypeSafe API key, 或 OpenRouter 的 Decisions 端点 key.
-2. 把 key 放进本地 dotenv 文件, 例如 `<dataRoot>/jev-credentials.env` (默认即 `~/.dsh/data/dsh-plugin-chrome/`):
+2. 把 key 放进本地 dotenv 文件, 例如 `~/.config/jev-browser-use/credentials.env`:
 
 ```shell
 TYPESAFE_API_KEY=tsk-your-key-here
 ```
 
-3. 让插件指向该文件——在 profile 的 `cordis.patch.yml` 中配置:
+3. 在 profile 的 `cordis.patch.yml` 中开启:
 
 ```yaml
 - id: dsh-plugin-chrome
   config:
     jevEnabled: true
     jevProvider: typesafe        # 或 openrouter
-    jevEnvFile: ~/.dsh/data/dsh-plugin-chrome/jev-credentials.env
+    jevEnvFile: ~/.config/jev-browser-use/credentials.env
 ```
 
-或直接在插件的设置页里打开 `jevEnabled` 并填写凭据路径 (设置页存储在 DSH home 内, 按 profile 隔离).
-
-密钥只存于 dotenv 文件——绝不进入配置, 聊天或日志. `jevEnvFile` 留空时插件回退到自身数据目录内的 `<dataRoot>/jev-credentials.env` (跟随 DSH home 隔离, 测试实例不会触碰宿主全局配置); `jevModel: ''` 表示用 provider 默认模型 (`jev-latest`).
+密钥只存于 dotenv 文件——绝不进入 `config.json`, 聊天或日志. 如果上游 jev-browser-use skill 已经配置过 (`~/.config/jev-browser-use/config.json`), `jevEnvFile` 留空时本插件会自动沿用它的 `envFile`/`provider`/`model`; `jevModel: ''` 表示用 provider 默认模型 (`jev-latest`).
 
 注意: `chrome_jev_run` 会把页面无障碍文本发送给所配置的 provider. 只在你能接受页面内容发往该端点的会话里开启此模式, 敏感页面请使用合成数据或公开内容.
 
@@ -158,7 +156,7 @@ TYPESAFE_API_KEY=tsk-your-key-here
 - **截图后纯文本模型不再回复**：`chrome_screenshot` 会把图片作为图片块写入会话历史。如果当前会话的模型不支持图片输入，之后每一轮请求都会以 `UNSUPPORTED_CONTENT: does not accept image input` 被整体拒绝，会话不再响应，重试无效。请给会截图的会话使用支持视觉的模型，或避免在其中调用 `chrome_screenshot`。
 - **安装被 pnpm strict-dep-builds 拦截**：在 profile 的 `pnpm-workspace.yaml` 的 `allowBuilds` 中加入 `dsh-plugin-chrome: true` 后重试安装。
 - **`chrome_jev_run` 说 Jev 工具未注册**: 该模式默认关闭——在插件配置里设置 `jevEnabled: true` 并重启 DSH.
-- **`chrome_jev_run` 报缺少凭据**: `jevEnvFile` 指向的 dotenv 文件 (默认 `<dataRoot>/jev-credentials.env`) 不存在, 或缺少 `TYPESAFE_API_KEY` / `OPENROUTER_API_KEY`. 修好文件即可; 不要把 key 粘到聊天或配置里.
+- **`chrome_jev_run` 报缺少凭据**: `jevEnvFile` 指向的 dotenv 文件 (或上游 `~/.config/jev-browser-use/config.json`) 不存在, 或缺少 `TYPESAFE_API_KEY` / `OPENROUTER_API_KEY`. 修好文件即可; 不要把 key 粘到聊天或配置里.
 - **`chrome_jev_run` 返回 `needs_verification`**: Jev 仅凭无障碍文本判断目标达成——请用 `chrome_snapshot` / `chrome_screenshot` 独立核验后再下结论.
 
 ## 开发

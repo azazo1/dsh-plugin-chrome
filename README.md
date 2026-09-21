@@ -96,25 +96,23 @@ No text entry, no screenshots/visual judgment, no selector/coordinate/URL invent
 ### Setup
 
 1. Get Jev access: a TypeSafe API key, or an OpenRouter key for the Decisions endpoint.
-2. Store the key in a local dotenv file, e.g. `<dataRoot>/jev-credentials.env` (`~/.dsh/data/dsh-plugin-chrome/` by default):
+2. Store the key in a local dotenv file, e.g. `~/.config/jev-browser-use/credentials.env`:
 
 ```shell
 TYPESAFE_API_KEY=tsk-your-key-here
 ```
 
-3. Point the plugin at that file — either in the profile's `cordis.patch.yml`:
+3. Enable the mode in the profile's `cordis.patch.yml`:
 
 ```yaml
 - id: dsh-plugin-chrome
   config:
     jevEnabled: true
     jevProvider: typesafe        # or openrouter
-    jevEnvFile: ~/.dsh/data/dsh-plugin-chrome/jev-credentials.env
+    jevEnvFile: ~/.config/jev-browser-use/credentials.env
 ```
 
-or simply set `jevEnabled: true` in the plugin's settings page and fill in the credential path there (the settings page stores into the DSH home, isolated per profile).
-
-Keys live only in the dotenv file — never in config, chat, or logs. When `jevEnvFile` is empty the plugin falls back to `<dataRoot>/jev-credentials.env` inside its own data root (isolated per DSH home, so test instances never touch global user config); `jevModel: ''` selects the provider default (`jev-latest`).
+Keys live only in the dotenv file — never in `config.json`, chat, or logs. If the upstream jev-browser-use skill is already configured (`~/.config/jev-browser-use/config.json`), this plugin picks up its `envFile`/`provider`/`model` automatically when `jevEnvFile` is empty; `jevModel: ''` selects the provider default (`jev-latest`).
 
 Note: `chrome_jev_run` sends the page's accessibility text to the configured provider. Enable the mode only for sessions whose pages you accept sharing with that endpoint, and prefer synthetic/public content for sensitive flows.
 
@@ -157,7 +155,7 @@ Data directory (browser profiles & screenshots): `~/.dsh/data/dsh-plugin-chrome/
 - **Chrome stays open after DSH is killed**: the orphan window is adopted on the next session call (or close it by hand); a clean DSH shutdown closes its windows.
 - **Screenshots stop a text-only model from responding**: `chrome_screenshot` delivers the picture as an image block into the conversation history. If the session's model does not accept images, every following turn is rejected with `UNSUPPORTED_CONTENT: does not accept image input` and the session no longer responds — retrying doesn't help. Use a vision-capable model for sessions that screenshot, or avoid `chrome_screenshot` there.
 - **`chrome_jev_run` says Jev tools are not registered**: the mode is off by default — set `jevEnabled: true` in the plugin config and restart DSH.
-- **`chrome_jev_run` reports a missing credential**: the dotenv file pointed to by `jevEnvFile` (default `<dataRoot>/jev-credentials.env`) does not exist or lacks `TYPESAFE_API_KEY` / `OPENROUTER_API_KEY`. Fix the file; do not paste keys into chat or config.
+- **`chrome_jev_run` reports a missing credential**: the dotenv file pointed to by `jevEnvFile` (or the upstream `~/.config/jev-browser-use/config.json`) does not exist or lacks `TYPESAFE_API_KEY` / `OPENROUTER_API_KEY`. Fix the file; do not paste keys into chat or config.
 - **`chrome_jev_run` returns `needs_verification`**: Jev believes the goal is met based on accessibility text only — independently verify with `chrome_snapshot` / `chrome_screenshot` before claiming success.
 - **Install blocked by pnpm (strict-dep-builds)**: add `dsh-plugin-chrome: true` to `allowBuilds` in the profile's `pnpm-workspace.yaml` and retry the install.
 
