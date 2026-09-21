@@ -13,6 +13,8 @@ import type { JsonValue, ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { resolveConfig } from '../src/host/config.ts'
 import { LaunchConsent } from '../src/host/consent.ts'
 import { JevSessionStore } from '../src/host/jev/engine.ts'
+import { formatJevRun } from '../src/host/tools-jev.ts'
+import type { JevRunResult } from '../src/host/jev/types.ts'
 import { registerTools, type ToolDeps } from '../src/host/tools.ts'
 
 /** Register the suite on a stub context and index the definitions by name. */
@@ -175,5 +177,47 @@ describe('chrome_screenshot 的输出契约', () => {
     delete absent.attachment
     expect(validateJsonSchemaValue(shot.output.schema, absent, 'value')).toEqual([])
     expect(JSON.stringify(shot.output.render({}, absent))).toContain('/tmp/shot.png')
+  })
+})
+
+describe('chrome_jev_run 的状态输出契约', () => {
+  /** 一份超过 4000 字符的状态: 首行是带 URL 的 header, 末行是最后一个条目. */
+  function longState(): { state: string; header: string; lastLine: string } {
+    const header = 'Browser tab: Settings URL: "https://example.com/settings".'
+    const lines = Array.from({ length: 300 }, (_, index) => `${index + 1} button Item ${index}`)
+    return { state: [header, ...lines].join('\n'), header, lastLine: lines[lines.length - 1] }
+  }
+
+  it('完整状态原样回给模型, 首尾都不截断', () => {
+    // 上游语义: state 只受 24000 字符硬上限约束 (超限报错), 从不静默裁剪.
+    // 这里钉住首行 (origin 核验所需的 URL) 与末行都必须留在结果里.
+    const { state, header, lastLine } = longState()
+    expect(state.length).toBeGreaterThan(4000)
+    const outcome: JevRunResult = {
+      status: 'needs_verification',
+      handoff: 'needs_verification',
+      history: [],
+      state,
+      elapsedMs: 1200,
+      steps: 3,
+      apiMs: 300,
+    }
+    const text = formatJevRun(outcome)
+    expect(text).toContain(header)
+    expect(text).toContain(lastLine)
+  })
+
+  it('短状态不做任何特殊处理', () => {
+    const state = 'Browser tab: T URL: "https://example.com/".\n1 button Save'
+    const outcome: JevRunResult = {
+      status: 'step_limit',
+      handoff: 'step_limit',
+      history: [],
+      state,
+      elapsedMs: 10,
+      steps: 1,
+      apiMs: 5,
+    }
+    expect(formatJevRun(outcome)).toContain(state)
   })
 })

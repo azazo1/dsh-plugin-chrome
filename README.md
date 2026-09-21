@@ -141,8 +141,9 @@ Override the plugin row in the profile's `cordis.patch.yml` (config is replaced 
     jevProvider: typesafe      # typesafe | openrouter
     jevModel: ''               # '' = provider default (jev-latest)
     jevEnvFile: ''             # dotenv file with TYPESAFE_API_KEY / OPENROUTER_API_KEY
-    maxJevStateChars: 24000    # max page-state chars sent per decision call
 ```
+
+The page state sent to Jev is capped at 24000 characters (the upstream jev-browser-use bound): a larger state fails the run with a "narrow the task" error instead of being silently truncated, so Jev and the main model always see the same complete state.
 
 Data directory (browser profiles & screenshots): `~/.dsh/data/dsh-plugin-chrome/sessions/<sessionId>/` (override with `dataRoot`).
 
