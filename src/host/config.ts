@@ -4,7 +4,7 @@
  * Every deployment-varying choice is a config field, so a profile patch can
  * tune it without editing source.
  */
-import z from 'schemastery'
+import z from '@deepseek-ai/schemastery'
 
 /** User-facing config shape. */
 export interface Config {

@@ -9,10 +9,12 @@
 import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
-import type { JsonValue, ToolDefinition } from '@deepseek-ai/dsh-tools'
+import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { resolveConfig } from '../src/host/config.ts'
 import { LaunchConsent } from '../src/host/consent.ts'
 import { registerTools, type ToolDeps } from '../src/host/tools.ts'
+
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
 /** Register the suite on a stub context and index the definitions by name. */
 function suite(): Map<string, ToolDefinition> {
