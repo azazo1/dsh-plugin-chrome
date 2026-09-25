@@ -4,7 +4,7 @@
  * 左侧实时画面（screencast WebSocket 帧 → canvas），右侧标签页列表，
  * 顶部控制条（打开/关闭/刷新/新建标签/截图）+「截图历史」子视图。
  * 状态以 5s 轮询兜底、WebSocket 事件即时刷新；所有写操作走同源
- * POST API，会话 id 来自槽位 kit 的 sessionId。
+ * POST API，会话 id 由会话作用域槽位的 inject 回调传入（rc.2 起 owner props 不再携带 sessionId）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
@@ -32,6 +32,8 @@ type View = 'live' | 'shots'
 /** Locale-bound props (the plugin's own namespace). */
 export interface ChromeTabProps {
   t: Translate
+  /** 当前会话 id, 由会话作用域槽位的 inject 回调提供. */
+  sessionId: string
 }
 
 /** POST a JSON control message; throws with the server's error text. */

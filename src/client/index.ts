@@ -9,8 +9,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+// 类型引用: 引入 ctx.slots 的 Context merge (rc.2 起由 ui-renderer 提供).
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
-import { ChromeTab } from './ChromeTab.tsx'
+import { ChromeTab, type ChromeTabProps } from './ChromeTab.tsx'
 import { CHROME_TAB_CSS, zh, en } from './styles.ts'
 
 /** Locale namespace owned by this plugin. */
@@ -61,5 +63,8 @@ export function apply(ctx: Context): void {
       id: 'chrome-hub',
       order: 40,
       label: () => t('tab.label'),
-    }, (props) => ChromeTab({ ...props, t })))
+      locale: NS,
+      // rc.2 起会话作用域的 inject 回调按会话调用并收到 sessionId, owner props 不再携带它.
+      inject: (sessionId: string): ChromeTabProps => ({ t, sessionId }),
+    }, ChromeTab))
 }

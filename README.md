@@ -47,6 +47,10 @@ npx -p @deepseek-ai/dsh dsh plugin --profile web add D:/harness/dsh-plugin-chrom
 
 Restart DSH after installing — a **Chrome** tab appears at the top of every conversation.
 
+Desktop uses the `desktop` profile, which the Electron application owns exclusively: `dsh plugin` refuses `--profile desktop`, so install the same package (or local directory) from the application's plugin-manager page and restart the app.
+
+The engine line requires `@deepseek-ai/dsh-*` at `>=0.1.7-rc.2 <0.2.0` (peerDependencies and devDependencies alike); earlier engine lines cannot install this version. web and desktop run the same Web application — the desktop host only adds a Host child process and a platform marker on `<html>` — so one package works on both and needs no separate build.
+
 > If your profile's `cordis.patch.yml` still carries an old manual mount line for `dsh-plugin-chrome` (from local development), remove it before installing through the CLI to avoid double-mounting.
 
 ## Usage
