@@ -61,9 +61,11 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
   ctx.effect(() => registerTools(ctx, deps), 'dsh-plugin-chrome: tools')
 
   // Web GUI API rides the optional webServer service: HTTP routes plus the
-  // screencast WebSocket. The effect wrapper re-registers cleanly when the
+  // screencast WebSocket. `connection` comes along because these routes live
+  // outside `/api`, where dsh normally authenticates: installApi applies the
+  // same fence per request. The effect wrapper re-registers cleanly when the
   // service fiber replays.
-  ctx.inject(['webServer'], (webCtx) => {
+  ctx.inject(['webServer', 'connection'], (webCtx) => {
     webCtx.effect(() => installApi(webCtx, manager), 'dsh-plugin-chrome: web api')
   })
 

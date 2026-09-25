@@ -10,6 +10,10 @@
  *   - a viewer connection attaches to an existing window and launches nothing;
  *   - an explicit open (the panel's Open button / chrome_open) still launches,
  *     and the already-connected viewer starts streaming from that window.
+ *
+ * The same surface is guarded by dsh's connection fence, so the fake host also
+ * carries a connection stub: a rejected request is refused (and a missing
+ * service fails closed) instead of reaching any route.
  */
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -50,6 +54,21 @@ function nextMessage(socket: WebSocket, timeoutMs = 4000): Promise<HostWsMessage
   })
 }
 
+/** Await a refused WebSocket handshake and return the client-side error text. */
+function handshakeFailure(socket: WebSocket, timeoutMs = 4000): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('等待 WebSocket 握手被拒超时')), timeoutMs)
+    socket.once('error', (error: Error) => {
+      clearTimeout(timer)
+      resolve(error.message)
+    })
+    socket.once('open', () => {
+      clearTimeout(timer)
+      reject(new Error('未认证的 WebSocket 握手被放行'))
+    })
+  })
+}
+
 describe('viewer connection policy', () => {
   let dataRoot: string
   let server: Server
@@ -58,11 +77,16 @@ describe('viewer connection policy', () => {
   let port = 0
   /** Session ids the manager was asked to launch (the assertion surface). */
   let launched: string[]
+  /** dsh connection stub state: present/absent and its verdict. */
+  let connectionPresent = true
+  let rejection: 401 | 403 | undefined
   const sockets: WebSocket[] = []
 
   beforeEach(async () => {
     dataRoot = mkdtempSync(join(tmpdir(), 'dsh-chrome-api-'))
     launched = []
+    connectionPresent = true
+    rejection = undefined
     manager = new ChromeManager(resolveConfig({ idleTimeoutMs: 0 }), dataRoot, async (sessionId) => {
       launched.push(sessionId)
       return { browser: fakeBrowser(), adopted: false }
@@ -78,6 +102,10 @@ describe('viewer connection policy', () => {
       upgradeHandler?.(req, socket, head)
     })
     const webCtx = {
+      // The routes ask the connection service per request; `undefined` here is
+      // the "service not mounted yet" case that must fail closed.
+      get: (name: string): unknown =>
+        name === 'connection' && connectionPresent ? { requestRejection: () => rejection } : undefined,
       webServer: {
         register: (route: { handler: typeof prefixHandler }) => {
           prefixHandler = route.handler
@@ -164,5 +192,31 @@ describe('viewer connection policy', () => {
     socket.close()
     await new Promise((resolve) => setTimeout(resolve, 300))
     expect(manager.get('session-detach')?.hasScreencastWatchers()).toBe(false)
+  })
+
+  it('refuses every route when the dsh connection fence rejects the request', async () => {
+    rejection = 401
+
+    const res = await fetch(`http://127.0.0.1:${String(port)}${API_PREFIX}/status?sessionId=session-unauth`)
+    expect(res.status).toBe(401)
+    expect(((await res.json()) as { error?: string }).error).toBeDefined()
+    // Nothing behind the fence ran: no launch, no window.
+    expect(launched).toEqual([])
+    expect(manager.get('session-unauth')).toBeUndefined()
+
+    const socket = new WebSocket(`ws://127.0.0.1:${String(port)}${WS_PATH}?sessionId=session-unauth`)
+    sockets.push(socket)
+    expect(await handshakeFailure(socket)).toContain('401')
+  })
+
+  it('fails closed when the connection service is missing', async () => {
+    connectionPresent = false
+
+    const res = await fetch(`http://127.0.0.1:${String(port)}${API_PREFIX}/status?sessionId=session-noservice`)
+    expect(res.status).toBe(503)
+
+    const socket = new WebSocket(`ws://127.0.0.1:${String(port)}${WS_PATH}?sessionId=session-noservice`)
+    sockets.push(socket)
+    expect(await handshakeFailure(socket)).toContain('503')
   })
 })

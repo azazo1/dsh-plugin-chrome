@@ -2,12 +2,16 @@
  * Web GUI API: status/control endpoints plus the live screencast WebSocket.
  *
  * Security posture (host serves only the browser GUI on loopback):
- *  - every mutation requires an application/json body and a same-origin
- *    Origin header (cross-site forms and scripts cannot mint JSON bodies
- *    with an Origin);
- *  - sessionId is whitelist-validated before it ever touches a path join;
- *  - file reads accept bare file names only (no traversal);
- *  - the WebSocket handshake validates sessionId the same way.
+ *  - authentication is dsh's own trust fence, applied per request through
+ *    `connection.requestRejection` (Host/Origin fence against DNS rebinding
+ *    plus the browser session cookie); HTTP and the WebSocket upgrade both go
+ *    through it, and a request that cannot be checked is refused, never
+ *    silently admitted;
+ *  - everything else here is business validation: sessionId is
+ *    whitelist-validated before it ever touches a path join, file reads accept
+ *    bare file names only (no traversal), mutations require an
+ *    application/json body, and the WebSocket handshake validates sessionId
+ *    the same way.
  */
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -30,6 +34,34 @@ const MAX_BODY_BYTES = 64 * 1024
 
 /** Collapse bursts of change events into one trailing status push. */
 const STATUS_BROADCAST_DEBOUNCE_MS = 120
+
+/**
+ * dsh connection service, typed locally: this is a standalone published package
+ * and must not import dsh internals.
+ */
+type ConnectionHandle = { requestRejection(request: { headers: unknown }): 401 | 403 | undefined }
+
+/**
+ * Apply dsh's trust fence to one request (HTTP route or WebSocket upgrade).
+ *
+ * These routes live outside `/api`, which is where the host normally mounts
+ * its authentication, so nothing else guards them. The service is read lazily
+ * per request on purpose: this plugin's apply can run before `connection` is
+ * provided, and a handle cached then would stay undefined and disable
+ * authentication for the rest of the process. A missing service fails closed.
+ */
+function rejectionOf(webCtx: Context, req: IncomingMessage): 401 | 403 | 503 | undefined {
+  const connection = webCtx.get('connection') as ConnectionHandle | undefined
+  if (connection === undefined) return 503
+  return connection.requestRejection(req)
+}
+
+/** Reason phrase for the raw status line of a refused upgrade. */
+function rejectionReason(status: 401 | 403 | 503): string {
+  if (status === 401) return 'Unauthorized'
+  if (status === 403) return 'Forbidden'
+  return 'Service Unavailable'
+}
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const data = JSON.stringify(body)
@@ -62,33 +94,15 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   }
 }
 
-/** Same-origin gate for mutations (mirrors the host's own API policy). */
-function assertSameOrigin(req: IncomingMessage): void {
+/**
+ * Mutations are parsed as JSON objects, so they must say so: a missing or wrong
+ * Content-Type is a format error, not a trust check. Trust is dsh's connection
+ * fence (see {@link rejectionOf}); comparing Origin against Host here would add
+ * nothing, since a DNS-rebinding page satisfies both.
+ */
+function assertJsonContentType(req: IncomingMessage): void {
   const contentType = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase()
   if (contentType !== 'application/json') throw new Error('Content-Type 必须为 application/json')
-  const origin = String(req.headers.origin ?? '')
-  if (origin === '') throw new Error('缺少 Origin 头')
-  let originHost = ''
-  try {
-    originHost = new URL(origin).host
-  } catch {
-    throw new Error('Origin 头无效')
-  }
-  const host = String(req.headers.host ?? '')
-  if (originHost !== host) throw new Error('跨站请求已拒绝')
-}
-
-/**
- * Reject cross-site reads. Modern browsers tag every request with
- * Sec-Fetch-Site; `cross-site` means an attacker page (or a cross-site
- * <img>/<script>) is hitting the loopback API, which should only ever serve
- * the same-origin Web GUI. Requests without the header (curl, older
- * clients) still pass — this is a hardening layer, not the whole gate.
- */
-function assertNotCrossSite(req: IncomingMessage): void {
-  if (String(req.headers['sec-fetch-site'] ?? '').toLowerCase() === 'cross-site') {
-    throw new Error('跨站请求已拒绝')
-  }
 }
 
 /** Validate and return a sessionId from query or body. */
@@ -215,8 +229,14 @@ export function installApi(webCtx: Context, manager: ChromeManager): () => void 
     kind: 'prefix',
     path: API_PREFIX,
     handler: async (req, res) => {
+      // dsh's trust fence first: these routes are outside `/api`, so this is
+      // the only authentication they ever see.
+      const rejection = rejectionOf(webCtx, req)
+      if (rejection !== undefined) {
+        sendJson(res, rejection, { error: rejection === 503 ? 'dsh connection 服务不可用' : '请求未通过 dsh 认证' })
+        return
+      }
       try {
-        assertNotCrossSite(req)
         const url = new URL(req.url ?? '/', 'http://localhost')
         const path = url.pathname
 
@@ -271,8 +291,8 @@ export function installApi(webCtx: Context, manager: ChromeManager): () => void 
           return
         }
 
-        // ---- mutations: same-origin + JSON body required ----
-        assertSameOrigin(req)
+        // ---- mutations: JSON body required ----
+        assertJsonContentType(req)
         const body = await readJsonBody(req)
         const sessionId = requireSessionId(body.sessionId, 'sessionId')
 
@@ -355,8 +375,9 @@ export function installApi(webCtx: Context, manager: ChromeManager): () => void 
         sendJson(res, 404, { error: '未知的 dsh-chrome API 路径' })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        const status = message.includes('跨站') || message.includes('Origin') || message.includes('Content-Type') ? 403 : 400
-        sendJson(res, status, { error: message })
+        // A wrong Content-Type is the only protocol-level refusal left in this
+        // handler; everything else is a bad request field.
+        sendJson(res, message.includes('Content-Type') ? 415 : 400, { error: message })
       }
     },
   })
@@ -412,9 +433,11 @@ export function installApi(webCtx: Context, manager: ChromeManager): () => void 
   const disposeUpgrade = webCtx.webServer.registerUpgrade({
     path: WS_PATH,
     handler: (req, socket, head) => {
-      // Same cross-site hardening as the HTTP reads (Sec-Fetch-Site).
-      if (String(req.headers['sec-fetch-site'] ?? '').toLowerCase() === 'cross-site') {
-        socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
+      // Upgrades carry no Fetch Metadata, so dsh's fence (Host/Origin plus the
+      // session cookie) is the only gate the handshake ever gets.
+      const rejection = rejectionOf(webCtx, req)
+      if (rejection !== undefined) {
+        socket.write(`HTTP/1.1 ${String(rejection)} ${rejectionReason(rejection)}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
         socket.destroy()
         return
       }
