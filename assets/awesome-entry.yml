@@ -1,5 +1,5 @@
-url: https://github.com/jiaererw/dsh-plugin-chrome
-name: jiaererw/dsh-plugin-chrome
+url: https://github.com/azazo1/dsh-plugin-chrome
+name: azazo1/dsh-plugin-chrome
 category: browser
 description:
   en: 'A visible Chrome window per DSH session: 16 chrome_* tools (open/status/close/navigate/tabs/snapshot/screenshot/click/click_at/fill/type/press_key/hover/scroll/evaluate/wait), a Chrome tab in the Web GUI with a live screencast view (screenshot-heartbeat fallback for idle pages), tab management, window controls and a screenshot history.'

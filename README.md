@@ -6,7 +6,7 @@
 |---|---|
 | ![browsing](assets/screenshot-1-bing.jpg) | ![douyin](assets/screenshot-2-douyin.jpg) |
 
-[![GitHub stars](https://img.shields.io/github/stars/jiaererw/dsh-plugin-chrome?style=flat-square)](https://github.com/jiaererw/dsh-plugin-chrome/stargazers)
+[![GitHub stars](https://img.shields.io/github/stars/azazo1/dsh-plugin-chrome?style=flat-square)](https://github.com/azazo1/dsh-plugin-chrome/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 [中文文档](README.zh.md)
@@ -40,7 +40,7 @@
 
 ```sh
 # Option 1: install from GitHub (recommended)
-npx -p @deepseek-ai/dsh dsh plugin --profile web add github:jiaererw/dsh-plugin-chrome
+npx -p @deepseek-ai/dsh dsh plugin --profile web add github:azazo1/dsh-plugin-chrome
 
 # Option 2: local path (development)
 npx -p @deepseek-ai/dsh dsh plugin --profile web add D:/harness/dsh-plugin-chrome

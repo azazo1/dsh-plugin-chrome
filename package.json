@@ -30,7 +30,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/jiaererw/dsh-plugin-chrome"
+    "url": "https://github.com/azazo1/dsh-plugin-chrome"
   },
   "files": [
     "lib/*.js",
