@@ -95,18 +95,59 @@ export function findBrowser(explicit: string): { path: string; name: string } {
   throw new Error('未找到可用的 Chrome / Edge / Chromium。请安装其中之一，或在插件配置里设置 executablePath。')
 }
 
+/** Flags that would break an invariant the plugin itself owns. */
+const GUARDED_ARGS: readonly { flag: string; reason: string }[] = [
+  { flag: '--user-data-dir', reason: '每个会话的浏览器 profile 由插件隔离管理' },
+  { flag: '--headless', reason: '请改用插件配置里的 headless 项' },
+  { flag: '--remote-debugging-port', reason: 'CDP 端点由插件自己拥有' },
+  { flag: '--remote-debugging-pipe', reason: 'CDP 端点由插件自己拥有' },
+  { flag: '--disable-extensions', reason: '会与配置里的 extensions 项冲突' },
+]
+
+/**
+ * Normalize the configured extra Chrome flags.
+ *
+ * Each row is one whole flag, so a value containing spaces (`--user-agent=Foo
+ * Bar`) survives; blank rows are dropped. Rows that are not flags, and flags
+ * that would fight an invariant the plugin owns, fail loudly with the reason
+ * instead of producing a browser that behaves nothing like the config says.
+ * @param extraArgs - raw config rows.
+ * @returns one argv entry per remaining flag.
+ * @throws when a row is unusable.
+ */
+export function extraLaunchArgs(extraArgs: readonly string[]): string[] {
+  const args: string[] = []
+  for (const row of extraArgs) {
+    const flag = row.trim()
+    if (flag === '') continue
+    if (!flag.startsWith('-')) {
+      throw new Error(`启动参数必须是一条命令行 flag (以 - 开头), 收到: ${flag}`)
+    }
+    const guarded = GUARDED_ARGS.find(entry => flag === entry.flag || flag.startsWith(`${entry.flag}=`))
+    if (guarded !== undefined) {
+      throw new Error(`启动参数 ${flag} 不被允许: ${guarded.reason}。请在插件配置里改用对应字段。`)
+    }
+    args.push(flag)
+  }
+  return args
+}
+
 /**
  * Build the puppeteer launch options for one session window.
  * @param userDataDir - isolated profile dir for this session.
- * @param headless - false keeps the window visible (the plugin's point).
- * @param windowWidth/Height - initial window size; 0 = Chrome default.
- * @param extraArgs - additional command-line flags.
+ * @param opts - window shape, the extra flags, and whether extensions load.
+ * @param opts.headless - false keeps the window visible (the plugin's point).
+ * @param opts.windowWidth/windowHeight - initial window size; 0 = Chrome default.
+ * @param opts.extraArgs - additional command-line flags, one per entry.
+ * @param opts.enableExtensions - skips puppeteer's `--disable-extensions`;
+ *   the extensions themselves are installed over CDP right after launch.
  */
 export function launchOptions(userDataDir: string, opts: {
   headless: boolean
   windowWidth: number
   windowHeight: number
-  extraArgs: string
+  extraArgs: readonly string[]
+  enableExtensions: boolean
 }): LaunchOptions {
   const args: string[] = [
     '--no-first-run',
@@ -117,9 +158,7 @@ export function launchOptions(userDataDir: string, opts: {
   if (opts.windowWidth > 0 && opts.windowHeight > 0) {
     args.push(`--window-size=${opts.windowWidth},${opts.windowHeight}`)
   }
-  if (opts.extraArgs.trim() !== '') {
-    args.push(...opts.extraArgs.trim().split(/\s+/))
-  }
+  args.push(...extraLaunchArgs(opts.extraArgs))
   return {
     headless: opts.headless,
     // null viewport = the viewport follows the real window size, which is
@@ -127,6 +166,9 @@ export function launchOptions(userDataDir: string, opts: {
     defaultViewport: null,
     userDataDir,
     args,
+    // Without this puppeteer appends --disable-extensions, which would make
+    // every configured extension silently absent.
+    enableExtensions: opts.enableExtensions,
     handleSIGINT: false,
     handleSIGTERM: false,
     handleSIGHUP: false,

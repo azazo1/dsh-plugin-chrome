@@ -5,8 +5,10 @@
  * chrome_* tool suite against `ctx.tools`, lazily mounts a Web GUI API
  * (status/control endpoints + live screencast WebSocket) on `webServer`,
  * and owns one visible Chrome window per agent session through
- * {@link ChromeManager}. Everything disposes with the plugin fiber —
- * unloading the plugin closes every Chrome window it opened.
+ * {@link ChromeManager}. Every launch applies the configured extension
+ * sources and extra Chrome flags, resolved at that moment so a config edit
+ * takes effect on the next window. Everything disposes with the plugin fiber
+ * — unloading the plugin closes every Chrome window it opened.
  *
  * Model experience: the tools add browser control to the model tool belt;
  * screenshots reach the model as image blocks when the attachment service
@@ -39,7 +41,10 @@ export type { ConfigShape }
 export function apply(ctx: Context, rawConfig: ConfigShape): void {
   const config = resolveConfig(rawConfig)
   const dataRoot = resolveDataRoot(config.dataRoot)
-  const manager = new ChromeManager(config, dataRoot)
+  const manager = new ChromeManager(config, dataRoot, undefined, {
+    info: (message) => { ctx.logger.info(message) },
+    warn: (message) => { ctx.logger.warn(message) },
+  })
   // One consent record for the whole plugin instance: it holds the sessions
   // whose user already approved launching a window (see ./consent.ts).
   const consent = new LaunchConsent()

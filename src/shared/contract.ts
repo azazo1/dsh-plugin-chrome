@@ -19,6 +19,12 @@ export const SCREENSHOTS_DIR = 'screenshots'
 /** Data-root layout: <dataRoot>/sessions/<sessionId>/profile + screenshots. */
 export const SESSIONS_DIR = 'sessions'
 
+/**
+ * Data-root layout: <dataRoot>/extensions/<source hash>/ holds one .crx
+ * unpacked once per configuration (shared by every session window).
+ */
+export const EXTENSIONS_DIR = 'extensions'
+
 /** Structural prefix of a store-minted session id (`session-<n>`). */
 const SESSION_ID_PREFIX = 'session-'
 

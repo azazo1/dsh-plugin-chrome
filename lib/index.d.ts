@@ -1,4 +1,4 @@
-import { Context } from "@deepseek-ai/cordis";
+import { Context, Volatile } from "@deepseek-ai/cordis";
 //#region node_modules/.pnpm/@deepseek-ai+cosmokit@1.8.5/node_modules/@deepseek-ai/cosmokit/lib/types/types.d.ts
 declare function isArrayBufferLike(value: any): value is ArrayBufferLike;
 declare function isArrayBufferSource(value: any): value is Binary.Source;
@@ -23,7 +23,7 @@ type Dict<T = any, K extends string | symbol = string> = { [key in K]: T; };
 /** Recursively readonly data returned by a volatile config reference. */
 type VolatileSnapshot<T> = T extends object ? { readonly [K in keyof T]: VolatileSnapshot<T[K]>; } : T;
 /** A stable reference; keep the reference, or capture its value for one operation only. */
-interface Volatile<T> {
+interface Volatile$1<T> {
   /** @returns the current immutable snapshot, including undefined for an absent value. */
   get(): VolatileSnapshot<T>;
 }
@@ -304,7 +304,7 @@ declare class ValidationError extends TypeError {
   static is(error: any): error is ValidationError;
 }
 type SchemaMode = 'plain' | 'defined' | 'volatile' | 'volatile-defined';
-type SchemaOutput<T, M extends SchemaMode> = M extends 'volatile' ? Volatile<T | undefined> : M extends 'volatile-defined' ? Volatile<T> : T;
+type SchemaOutput<T, M extends SchemaMode> = M extends 'volatile' ? Volatile$1<T | undefined> : M extends 'volatile-defined' ? Volatile$1<T> : T;
 type SetRequired<M extends SchemaMode, R extends boolean> = M extends 'volatile' | 'volatile-defined' ? R extends true ? 'volatile-defined' : 'volatile' : R extends true ? 'defined' : 'plain';
 type Schema<S = any, T = S, Mode extends SchemaMode = 'plain'> = Schemastery<S, T, Mode>;
 declare const Schema: Schemastery.Static;
@@ -324,8 +324,9 @@ interface Config {
   headless?: boolean;
   /**
    * Data root. Each session gets <dataRoot>/sessions/<sessionId>/ holding
-   * its isolated browser profile and screenshots. Defaults to
-   * <DSH_HOME>/data/dsh-plugin-chrome.
+   * its isolated browser profile and screenshots, plus a shared
+   * <dataRoot>/extensions/ cache for sources unpacked from .crx files.
+   * Defaults to <DSH_HOME>/data/dsh-plugin-chrome.
    */
   dataRoot?: string;
   /**
@@ -336,8 +337,21 @@ interface Config {
   /** Initial window width/height in pixels; 0 = Chrome default. */
   windowWidth?: number;
   windowHeight?: number;
-  /** Extra Chrome command-line flags (joined with a space). */
-  extraArgs?: string;
+  /**
+   * Extra Chrome command-line flags, one flag per entry (a whole flag, not a
+   * value shell could split: `--lang=zh-CN`). Flags that would fight the
+   * plugin's own invariants (profile isolation, headless choice, the CDP
+   * endpoint, extension loading) are rejected at launch.
+   */
+  extraArgs?: Volatile<string[]>;
+  /**
+   * Extensions to load into every session window: `.crx` files and/or
+   * unpacked extension directories (absolute paths, or `~`-prefixed ones).
+   * A `.crx` is unpacked into the shared <dataRoot>/extensions/ cache with
+   * the CRX public key written into `manifest.key`, so the extension keeps
+   * its original ID; a directory source is used in place.
+   */
+  extensions?: Volatile<string[]>;
   /**
    * Screencast frame skip: one frame is kept every N source frames.
    * Higher = less bandwidth, lower = smoother live preview.
@@ -357,8 +371,43 @@ interface Config {
    */
   confirmFirstLaunch?: boolean;
 }
-/** Loader-validated config schema; defaults come from {@link DEFAULTS}. */
-declare const Config: Schema<Config>;
+/**
+ * Loader-validated config schema; defaults come from {@link DEFAULTS}.
+ *
+ * Deliberately not annotated as `z<Config>`: the schema describes plain
+ * values while the fields the Loader hands the plugin are volatile refs, and
+ * schemastery's facade type has no room for that difference on arrays (the
+ * per-field volatility is checked at the use sites instead).
+ */
+declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
+  executablePath: Schema<string, string, "defined">;
+  headless: Schema<boolean, boolean, "defined">;
+  dataRoot: Schema<string, string, "defined">;
+  idleTimeoutMs: Schema<number, number, "defined">;
+  windowWidth: Schema<number, number, "defined">;
+  windowHeight: Schema<number, number, "defined">;
+  extraArgs: Schema<NoInfer<string[]>, NoInfer<string[]>, "volatile-defined">;
+  extensions: Schema<NoInfer<string[]>, NoInfer<string[]>, "volatile-defined">;
+  screencastFrameSkip: Schema<number, number, "defined">;
+  screencastQuality: Schema<number, number, "defined">;
+  maxSnapshotText: Schema<number, number, "defined">;
+  maxTabs: Schema<number, number, "defined">;
+  confirmFirstLaunch: Schema<boolean, boolean, "defined">;
+}>>, Schemastery.ObjectT<NoInfer<{
+  executablePath: Schema<string, string, "defined">;
+  headless: Schema<boolean, boolean, "defined">;
+  dataRoot: Schema<string, string, "defined">;
+  idleTimeoutMs: Schema<number, number, "defined">;
+  windowWidth: Schema<number, number, "defined">;
+  windowHeight: Schema<number, number, "defined">;
+  extraArgs: Schema<NoInfer<string[]>, NoInfer<string[]>, "volatile-defined">;
+  extensions: Schema<NoInfer<string[]>, NoInfer<string[]>, "volatile-defined">;
+  screencastFrameSkip: Schema<number, number, "defined">;
+  screencastQuality: Schema<number, number, "defined">;
+  maxSnapshotText: Schema<number, number, "defined">;
+  maxTabs: Schema<number, number, "defined">;
+  confirmFirstLaunch: Schema<boolean, boolean, "defined">;
+}>>, "plain">;
 //#endregion
 //#region src/host/index.d.ts
 declare const name = "dsh-plugin-chrome";

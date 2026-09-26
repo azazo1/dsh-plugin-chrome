@@ -6,14 +6,55 @@
  * Run with: npm run test:e2e
  */
 import { afterAll, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import type { Browser } from 'puppeteer-core'
 import { captureScreenshot, cdpSession, clickUid, navigate } from '../src/host/actions.ts'
 import { findBrowser, launchBrowser, launchOptions } from '../src/host/browser.ts'
 import { SessionChrome } from '../src/host/manager.ts'
 import { resolveConfig } from '../src/host/config.ts'
 import { resolveUid, snapshotPage } from '../src/host/snapshot.ts'
+import { extensionTree } from './helpers/crx-fixture.ts'
+
+/** Write one minimal MV3 extension tree to disk. */
+function writeExtensionTree(dir: string): void {
+  for (const [name, bytes] of Object.entries(extensionTree())) {
+    const path = join(dir, name)
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, bytes)
+  }
+}
+
+/**
+ * Launch the visible Chrome every extension case shares: one profile under the
+ * scratch root, extensions allowed (`--disable-extensions` left out).
+ */
+async function openExtensionWindow(extensionDir: string): Promise<Browser> {
+  const exec = findBrowser(resolveConfig({ idleTimeoutMs: 0 }).executablePath)
+  const { browser } = await launchBrowser(exec.path, launchOptions(join(dirname(extensionDir), 'profile-ext'), {
+    headless: false,
+    windowWidth: 900,
+    windowHeight: 640,
+    extraArgs: [],
+    enableExtensions: true,
+  }))
+  return browser
+}
+
+/**
+ * Evaluate an expression in the extension's service worker, waiting for it to
+ * start (MV3 workers are started on demand).
+ */
+async function extensionStorage(browser: Browser, extensionId: string, expression: string): Promise<unknown> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const extension = (await browser.extensions()).get(extensionId)
+    const workers = extension === undefined ? [] : await extension.workers()
+    if (workers.length > 0) return await workers[0].evaluate(expression)
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  throw new Error('扩展的 service worker 没有启动')
+}
 
 const TEST_PAGE = `data:text/html,<html><body>
   <h1 id="greeting">Smoke</h1>
@@ -37,7 +78,8 @@ describe('chrome e2e smoke', () => {
       headless: false,
       windowWidth: 1000,
       windowHeight: 700,
-      extraArgs: '',
+      extraArgs: [],
+      enableExtensions: false,
     }))
     session = new SessionChrome('session-smoke-e2e', browser, scratch, config, adopted)
     const page = (await browser.pages())[0]
@@ -106,5 +148,56 @@ describe('chrome e2e smoke', () => {
     await diagSession.send('Page.stopScreencast').catch(() => {})
     await diagSession.detach().catch(() => {})
     expect(rawFrames.length).toBeGreaterThan(0)
+  })
+
+  it('loads an unpacked extension into a session window', { timeout: 120000 }, async () => {
+    const extensionDir = join(scratch, 'fixture-extension')
+    writeExtensionTree(extensionDir)
+    const browser = await openExtensionWindow(extensionDir)
+    try {
+      const id = await browser.installExtension(extensionDir)
+      const extensions = await browser.extensions()
+      const installed = extensions.get(id)
+      expect(installed).toBeDefined()
+      expect(installed?.name).toBe('Fixture extension')
+      // Chrome reports resolved paths (macOS /var -> /private/var).
+      expect(installed?.path).toBe(realpathSync(extensionDir))
+    } finally {
+      await browser.close()
+    }
+  })
+
+  /**
+   * The extension story the plugin relies on: Chrome drops extensions
+   * installed over CDP when the browser restarts (so a window has to install
+   * them again), while the extension's OWN data stays in the session profile
+   * keyed by extension ID (so the user's settings inside the extension are
+   * still there after a relaunch).
+   */
+  it('keeps the extension settings across a window relaunch, re-installing it each time', { timeout: 180000 }, async () => {
+    const extensionDir = join(scratch, 'persist-extension')
+    writeExtensionTree(extensionDir)
+
+    const first = await openExtensionWindow(extensionDir)
+    const firstId = await first.installExtension(extensionDir)
+    // The user's edit inside the extension, as it would happen in the window.
+    const wrote = await extensionStorage(first, firstId, `(async () => {
+      await chrome.storage.local.set({ marker: 'edited-in-instance' })
+      return chrome.storage.local.get('marker')
+    })()`)
+    expect(wrote).toMatchObject({ marker: 'edited-in-instance' })
+    await first.close()
+
+    // A fresh launch no longer knows the extension: this is why the plugin
+    // installs the configured directories on every launch.
+    const second = await openExtensionWindow(extensionDir)
+    expect((await second.extensions()).size).toBe(0)
+    const secondId = await second.installExtension(extensionDir)
+    expect(secondId).toBe(firstId)
+    const readBack = await extensionStorage(second, secondId, `chrome.storage.local.get(['marker', 'startups'])`)
+    // eslint-disable-next-line no-console
+    console.log('[e2e] extension storage after relaunch:', JSON.stringify(readBack))
+    expect(readBack).toMatchObject({ marker: 'edited-in-instance' })
+    await second.close()
   })
 })

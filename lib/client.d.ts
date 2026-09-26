@@ -23,6 +23,21 @@ declare const zh: {
   'meta.lastUsed': string;
   'meta.tabs': string;
   'meta.shotCount': string;
+  'config.extensions': string;
+  'config.extensionsHint': string;
+  'config.extensionsPlaceholder': string;
+  'config.extraArgs': string;
+  'config.extraArgsHint': string;
+  'config.extraArgsPlaceholder': string;
+  'config.add': string;
+  'config.remove': string;
+  'config.invalidRow': string;
+  'config.save': string;
+  'config.saving': string;
+  'config.saveFailed': string;
+  'config.unavailable': string;
+  'config.readOnly': string;
+  'config.appliesNextLaunch': string;
 };
 declare const en: {
   'tab.label': string;
@@ -46,6 +61,21 @@ declare const en: {
   'meta.lastUsed': string;
   'meta.tabs': string;
   'meta.shotCount': string;
+  'config.extensions': string;
+  'config.extensionsHint': string;
+  'config.extensionsPlaceholder': string;
+  'config.extraArgs': string;
+  'config.extraArgsHint': string;
+  'config.extraArgsPlaceholder': string;
+  'config.add': string;
+  'config.remove': string;
+  'config.invalidRow': string;
+  'config.save': string;
+  'config.saving': string;
+  'config.saveFailed': string;
+  'config.unavailable': string;
+  'config.readOnly': string;
+  'config.appliesNextLaunch': string;
 };
 //#endregion
 //#region src/client/index.d.ts
@@ -59,7 +89,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 /** Client services this plugin reads. */
 declare const inject: string[];
 /**
- * Client plugin entry: register the locale dictionaries and the Chrome tab.
+ * Client plugin entry: register the locale dictionaries, the Chrome tab, and
+ * the launch-configuration card.
  * @param ctx - client plugin context (`slots`, `locale` injected).
  */
 declare function apply(ctx: Context): void;

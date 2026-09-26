@@ -8,19 +8,25 @@
  * survives between tool calls (the "separate, long-lived browser" model)
  * until chrome_close, an idle timeout, or host shutdown reaps it.
  */
-import type { Browser, CDPSession, Page } from 'puppeteer-core'
-import { mkdirSync } from 'node:fs'
-import { join } from 'node:path'
+import type { Browser, CDPSession, Extension, Page } from 'puppeteer-core'
+import { existsSync, mkdirSync } from 'node:fs'
+import { join, sep } from 'node:path'
 import type { ChromeEventDetail, ChromeStatus, PageInfo } from '../shared/contract.ts'
-import { SCREENSHOTS_DIR, SESSIONS_DIR, shortSessionId } from '../shared/contract.ts'
+import { EXTENSIONS_DIR, SCREENSHOTS_DIR, SESSIONS_DIR, shortSessionId } from '../shared/contract.ts'
 import type { UidEntry } from './snapshot.ts'
 import { closeBrowserHard, findBrowser, forceWindowVisible, launchBrowser, launchOptions } from './browser.ts'
 import { captureScreenshot, navigate, NAV_TIMEOUT_MS, normalizeUrl } from './actions.ts'
+import { materializeExtensions, resolveExtensionSources, canonicalPath, SILENT_LOG, type ExtensionLog } from './extensions.ts'
 import { latestScreenshot } from './shots.ts'
 import type { ResolvedConfig } from './config.ts'
 
 /** Internal Chrome-internal pages never shown or controlled. */
 const INTERNAL_URL_RE = /^(chrome|chrome-extension|devtools|edge|view-source):/iu
+
+/** Whether one extension directory sits inside the plugin's own crx cache. */
+function isInsideCache(path: string, cacheRoot: string): boolean {
+  return path === cacheRoot || path.startsWith(`${cacheRoot}${sep}`)
+}
 
 /** Welcome page shown in a freshly launched window (data: URL). */
 function welcomePage(sessionId: string): string {
@@ -408,8 +414,10 @@ export class SessionChrome {
  * Produces one raw Chrome instance for a session. The production value
  * discovers the user's browser and launches it; tests substitute a fake so
  * window-lifecycle policy is exercised without spawning Chrome.
+ * @param sessionId - session owning the window.
+ * @param extensionDirs - extension directories the launch must allow.
  */
-export type LaunchChrome = (sessionId: string) => Promise<{ browser: Browser; adopted: boolean }>
+export type LaunchChrome = (sessionId: string, extensionDirs: readonly string[]) => Promise<{ browser: Browser; adopted: boolean }>
 
 /** Manager owning every session window and the shared launch policy. */
 export class ChromeManager {
@@ -421,8 +429,13 @@ export class ChromeManager {
   /** The launch path in force (production launch, or an injected test seam). */
   private readonly launchChrome: LaunchChrome
 
-  constructor(readonly config: ResolvedConfig, private readonly dataRoot: string, launchChrome?: LaunchChrome) {
-    this.launchChrome = launchChrome ?? ((sessionId: string) => this.launchChromeReal(sessionId))
+  constructor(
+    readonly config: ResolvedConfig,
+    private readonly dataRoot: string,
+    launchChrome?: LaunchChrome,
+    private readonly log: ExtensionLog = SILENT_LOG,
+  ) {
+    this.launchChrome = launchChrome ?? ((sessionId: string, dirs: readonly string[]) => this.launchChromeReal(sessionId, dirs))
     // Reap idle windows every 30 seconds.
     this.idleTimer = setInterval(() => this.reapIdle(), 30000)
     this.idleTimer.unref?.()
@@ -434,16 +447,101 @@ export class ChromeManager {
     return this.executable
   }
 
+  /** Config-level cache holding one unpacked directory per `.crx` source. */
+  private get extensionsCacheRoot(): string {
+    return join(this.dataRoot, EXTENSIONS_DIR)
+  }
+
   /** Default launcher: discover the user's browser and start one instance. */
-  private async launchChromeReal(sessionId: string): Promise<{ browser: Browser; adopted: boolean }> {
+  private async launchChromeReal(sessionId: string, dirs: readonly string[]): Promise<{ browser: Browser; adopted: boolean }> {
     const exec = this.resolveExecutable()
     const profileDir = join(this.dataRoot, SESSIONS_DIR, sessionId, 'profile')
     return launchBrowser(exec.path, launchOptions(profileDir, {
       headless: this.config.headless,
       windowWidth: this.config.windowWidth,
       windowHeight: this.config.windowHeight,
-      extraArgs: this.config.extraArgs,
+      extraArgs: this.config.extraArgs.get(),
+      // Extensions load over CDP after the launch, so puppeteer only has to
+      // keep `--disable-extensions` out of the command line.
+      enableExtensions: dirs.length > 0,
     }))
+  }
+
+  /**
+   * Resolve the configured extension sources into loadable directories.
+   *
+   * Runs on every launch so a configuration edit applies to the next window
+   * and a crx dropped from the config is pruned from the cache; a deployment
+   * that never used the feature (nothing configured, no cache) skips the work
+   * entirely.
+   * @returns directories to install, empty when no extension is configured.
+   * @throws when a configured source is unusable (the launch then fails with
+   *   the whole problem list instead of silently dropping extensions).
+   */
+  private async extensionDirs(): Promise<string[]> {
+    const configured = this.config.extensions.get()
+    if (configured.length === 0 && !existsSync(this.extensionsCacheRoot)) return []
+    const sources = resolveExtensionSources(configured)
+    mkdirSync(this.extensionsCacheRoot, { recursive: true })
+    return materializeExtensions(sources, this.extensionsCacheRoot, this.log)
+  }
+
+  /**
+   * Make the running window carry exactly the configured extensions.
+   *
+   * Chrome does NOT keep an extension installed through `Extensions.loadUnpacked`
+   * across a browser restart (verified against a real Chrome: the next launch
+   * reports no extensions at all), so every fresh launch installs the
+   * configured directories again. The already-installed diff still matters for
+   * the adopt path: a window inherited from a previous host is the same
+   * process, and installing there again would be pointless churn.
+   *
+   * The extension's OWN data (`chrome.storage`, cookies, IndexedDB) does live
+   * on in the session profile keyed by extension ID, so re-installing finds
+   * the user's settings exactly as they were left — as long as the ID stays
+   * stable, which the crx path guarantees by writing the publisher key into
+   * the manifest.
+   *
+   * Extensions that point into our own cache but are no longer configured are
+   * removed, so a re-parameterized crx (new cache directory) does not leave a
+   * broken registration behind.
+   * @param browser - the launched or adopted browser.
+   * @param dirs - directories the current configuration wants.
+   */
+  private async syncExtensions(browser: Browser, dirs: readonly string[]): Promise<void> {
+    let installed: Map<string, Extension>
+    try {
+      installed = await browser.extensions()
+    } catch (error) {
+      if (dirs.length === 0) return
+      throw new Error(`无法读取已装扩展, 该 Chrome 可能不支持扩展接口: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    // Chrome answers with resolved paths: compare canonically on both sides.
+    const cacheRoot = canonicalPath(this.extensionsCacheRoot)
+    const wanted = dirs.map(dir => canonicalPath(dir))
+    const present = new Set<string>()
+    const stale: string[] = []
+    for (const [id, extension] of installed) {
+      const path = canonicalPath(extension.path)
+      present.add(path)
+      if (isInsideCache(path, cacheRoot) && !wanted.includes(path)) stale.push(id)
+    }
+    let added = 0
+    for (const dir of wanted) {
+      if (present.has(dir)) continue
+      try {
+        await browser.installExtension(dir)
+        added += 1
+      } catch (error) {
+        throw new Error(`扩展装入失败: ${dir}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    for (const id of stale) {
+      await browser.uninstallExtension(id).catch(() => {})
+    }
+    if (added > 0 || stale.length > 0) {
+      this.log.info(`扩展同步完成: 装入 ${added} 个, 清理 ${stale.length} 个, 当前启用 ${dirs.length} 个`)
+    }
   }
 
   /** Get a live session window, or undefined. */
@@ -480,10 +578,14 @@ export class ChromeManager {
 
   /** Launch body (owns failure cleanup). */
   private async doLaunch(sessionId: string, url?: string): Promise<SessionChrome> {
-    const { browser, adopted } = await this.launchChrome(sessionId)
+    const dirs = await this.extensionDirs()
+    const { browser, adopted } = await this.launchChrome(sessionId, dirs)
     const session = new SessionChrome(sessionId, browser, this.dataRoot, this.config, adopted)
     this.sessions.set(sessionId, session)
     try {
+      // Extensions first, so the tab this launch navigates below already has
+      // their content scripts.
+      await this.syncExtensions(browser, dirs)
       // The whole point of the plugin is a VISIBLE window: a DSH host that
       // itself started hidden (task scheduler / hidden shortcut) passes the
       // hidden state down to Chrome. Force the window onto the desktop.

@@ -11,6 +11,8 @@ describe('resolveConfig', () => {
     expect(config.maxSnapshotText).toBe(60000)
     expect(config.screencastFrameSkip).toBe(4)
     expect(config.confirmFirstLaunch).toBe(true)
+    expect(config.extensions.get()).toEqual([])
+    expect(config.extraArgs.get()).toEqual([])
   })
 
   it('keeps explicit values', () => {
@@ -18,6 +20,23 @@ describe('resolveConfig', () => {
     expect(config.headless).toBe(true)
     expect(config.idleTimeoutMs).toBe(0)
     expect(config.maxTabs).toBe(4)
+  })
+
+  it('reads the two list fields through a live value', () => {
+    const config = resolveConfig({ extensions: ['/ext/one.crx'], extraArgs: ['--lang=zh-CN'] })
+    expect(config.extensions.get()).toEqual(['/ext/one.crx'])
+    expect(config.extraArgs.get()).toEqual(['--lang=zh-CN'])
+    // Copies, so a caller cannot mutate the config through the returned array.
+    expect(config.extensions.get()).not.toBe(config.extensions.get())
+  })
+
+  it('follows a volatile ref, the shape the Loader hands over', () => {
+    let rows = ['/ext/one.crx']
+    const ref = { get: () => rows }
+    const config = resolveConfig({ extensions: ref })
+    expect(config.extensions.get()).toEqual(['/ext/one.crx'])
+    rows = ['/ext/two.crx']
+    expect(config.extensions.get()).toEqual(['/ext/two.crx'])
   })
 })
 

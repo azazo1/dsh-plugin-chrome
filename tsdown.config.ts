@@ -30,8 +30,19 @@ const HOST_EXTERNALS = [
   '@deepseek-ai/dsh-attachment',
 ]
 
-/** Client-half externals: browser module-table rows (react + jsx runtime). */
-const CLIENT_EXTERNALS = ['react', 'react/jsx-runtime', 'react-dom', 'react-dom/client']
+/**
+ * Client-half externals: browser module-table rows (react + jsx runtime, and
+ * the platform packages the client bundle requires at runtime — they carry
+ * their own CSS-module imports, which this build has no plugin for).
+ */
+const CLIENT_EXTERNALS = [
+  'react',
+  'react/jsx-runtime',
+  'react-dom',
+  'react-dom/client',
+  '@deepseek-ai/dsh-client-store',
+  '@deepseek-ai/dsh-client-ui-primitives',
+]
 
 const matches = (specifier: string, names: readonly string[]): boolean =>
   names.some((name) => specifier === name || specifier.startsWith(`${name}/`))

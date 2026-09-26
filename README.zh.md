@@ -31,6 +31,7 @@
 - **截图双通道**：`chrome_screenshot` 的图片既进模型上下文（图片块），也保存到会话截图目录并展示在面板里；历史记录带标题/URL/尺寸元数据，重启后仍在。（会话用纯文本模型？请看常见问题。）
 - **安全设计**：CDP 不暴露固定端口；Web API 拒绝跨站请求（Sec-Fetch-Site）+ sessionId 白名单校验；浏览器数据按会话隔离。
 - **首次启动先经你同意**: 每个会话第一次启动浏览器窗口前会弹一次审批 (走 DSH 原生审批通道, 在 Web GUI 里点「允许一次」), 同意之后该会话内所有 `chrome_*` 调用都不再询问; 拒绝则不启动浏览器, 下次调用会再问一次. 审批弹窗里的理由就是模型写的 `chrome_open.justification` 原文 (该参数必填), 弹窗不会出现插件写死的模板句子; 会隐式开窗的其他工具没带理由时直接失败并提示改用 `chrome_open`. 没有审批通道的部署 (纯 CLI / headless) 自动跳过这一步.
+- **扩展与启动参数可配置**：`extensions` 收 `.crx` 文件或未打包目录（crx 解包进配置级缓存，扩展 ID 与原文件一致），`extraArgs` 收任意 Chrome 命令行参数；两者都能在 Web GUI 的插件配置卡片里改，改动即时生效且不打断已打开的窗口。
 - **资源治理**：空闲自动关闭（默认 10 分钟，可配置），`chrome_close` 显式关闭，插件卸载/宿主退出时全部收尾。
 
 ## 安装
@@ -97,10 +98,25 @@ Agent 会：`chrome_open` → `chrome_navigate` → `chrome_screenshot`（看图
     maxSnapshotText: 60000     # 单次快照最大字符数
     maxTabs: 16
     confirmFirstLaunch: true   # 会话首次启动浏览器窗口前弹一次审批（false=从不询问）
-    extraArgs: ''              # 追加的 Chrome 启动参数
+    extensions:                # 每项一个 .crx 文件或未打包扩展目录（可留空）
+      - ~/ext/tool.crx
+      - /abs/path/to/unpacked-extension
+    extraArgs:                 # 每项一条完整的 Chrome 启动参数（可留空）
+      - --lang=zh-CN
+      - --proxy-server=http://127.0.0.1:7890
 ```
 
-数据目录（浏览器配置与截图）：`~/.dsh/data/dsh-plugin-chrome/sessions/<sessionId>/`（可用 `dataRoot` 覆盖）。
+`extensions` 与 `extraArgs` 也可以在 Web GUI 里直接改：设置 → Plugins → `dsh-plugin-chrome` 卡片页的「扩展来源」「额外启动参数」两个列表。这两个字段是 volatile 的，保存不会重挂插件、也不会关掉已经打开的窗口，改动对之后打开（或重开）的窗口生效。
+
+### 扩展
+
+- 两种来源混用：`.crx` 文件与未打包扩展目录；都写绝对路径或 `~` 开头。目录来源原地使用，`.crx` 会解包一次到配置级缓存目录（所有会话共享，见下）后装入，因此同一个 crx 只在首次使用或文件变动时解包。
+- **crx 是解包装入**：Chrome 命令行与 DevTools 协议都不能直接安装 `.crx`（`Extensions.loadUnpacked` 只收未打包目录，新版 Chrome 也限制了拖拽安装），所以插件自己解包，并把 CRX 头里的公钥写进 `manifest.json` 的 `key`，让扩展 ID 与签名版本一致（`chrome-extension://<id>/...` 与扩展自身按 ID 绑定的逻辑都照旧）。
+- 由此带来两点差异：扩展在浏览器里显示为「未打包 / 开发模式」扩展，不会自动更新；如果扩展自己检查安装来源（例如 `management.getSelf().installType`）或校验签名，行为可能与商店版本不同。另外个别扩展会因为签名校验而拒绝在未打包状态下运行。
+- 扩展自身的设置（扩展自己写在 `chrome.storage`、cookies、IndexedDB 里的内容）保存在**该会话 Chrome profile** 里，按扩展 ID 索引：同一个会话关窗再开，插件会重新装入扩展，而设置原样还在；不同会话之间不共享（每会话一个隔离 profile，见下）。也因此，换一个不同密钥签名的 crx 会得到新的扩展 ID，旧设置就读不到了。
+- 来源无效（路径不存在、不是 crx 也不是带 `manifest.json` 的目录）会让开窗直接失败，并把所有问题一次列出来；不会静默跳过。`extraArgs` 里与插件自身不变量冲突的参数（`--user-data-dir`、`--headless`、`--remote-debugging-*`、`--disable-extensions`）同样会被拒绝并说明原因。
+
+数据目录：会话浏览器配置与截图在 `~/.dsh/data/dsh-plugin-chrome/sessions/<sessionId>/`，crx 解包缓存（配置级、所有会话共享）在 `~/.dsh/data/dsh-plugin-chrome/extensions/`（均可用 `dataRoot` 覆盖）。
 
 ## 常见问题
 
@@ -112,18 +128,23 @@ Agent 会：`chrome_open` → `chrome_navigate` → `chrome_screenshot`（看图
 - **登录态问题**：每个会话的浏览器是独立 profile，登录态不复用日常浏览器；这是隔离设计，如需登录某网站请让 Agent 完成一次登录（session 期间保持）。
 - **杀 DSH 后 Chrome 还开着**：孤儿窗口会在下次会话调用时被自动接管，或手动关闭即可；正常关闭 DSH（插件卸载）会连带关闭窗口。
 - **截图后纯文本模型不再回复**：`chrome_screenshot` 会把图片作为图片块写入会话历史。如果当前会话的模型不支持图片输入，之后每一轮请求都会以 `UNSUPPORTED_CONTENT: does not accept image input` 被整体拒绝，会话不再响应，重试无效。请给会截图的会话使用支持视觉的模型，或避免在其中调用 `chrome_screenshot`。
+- **扩展装了但看起来没生效**：先确认窗口是在改完配置之后打开（或重开）的，再在窗口里打开 `chrome://extensions` 看它是否在列表里、是否被浏览器拒绝（未打包扩展会显示为开发模式扩展）。crx 解包缓存是配置级的，改 crx 文件本身会在下一次开窗时自动重解包；把某项从配置里删掉，缓存目录也会在下一次开窗时清理。
+- **在 GUI 里改这两项找不到位置**：设置 → Plugins → `dsh-plugin-chrome` 卡片，往下是「扩展来源」与「额外启动参数」两张列表；如果卡片页没有这段，说明当前 profile 没提供配置表单服务（此时仍可用 `cordis.patch.yml` 配置）。
 - **安装被 pnpm strict-dep-builds 拦截**：在 profile 的 `pnpm-workspace.yaml` 的 `allowBuilds` 中加入 `dsh-plugin-chrome: true` 后重试安装。
 
 ## 开发
 
-```sh
-pnpm install    # 本仓库统一使用 pnpm
-pnpm typecheck   # host + client 两个 program
-pnpm test        # vitest 单测
-pnpm test:e2e    # 真实 Chrome 端到端冒烟 (会弹出可见窗口)
-pnpm build       # lib/index.js + lib/index.d.ts (host), lib/client.js + lib/client.d.ts (client bundle)
-pnpm watch       # 开发时持续构建; client 变更经 HMR 热更, host 变更需重启 DSH
+```shell
+just install     # 本仓库统一使用 pnpm
+just typecheck   # host + client 两个 program
+just test        # vitest 单测
+just test-e2e    # 真实 Chrome 端到端冒烟 (会弹出可见窗口)
+just build       # lib/index.js + lib/index.d.ts (host), lib/client.js + lib/client.d.ts (client bundle)
+just watch       # 开发时持续构建; client 变更经 HMR 热更, host 变更需重启 DSH
+just verify      # 类型检查 + 构建 + 单测 + 打包内容预览
 ```
+
+`justfile` 里每个 recipe 只是对应 `package.json` 脚本的转发, 想直接用 pnpm 也可以 (例如 `pnpm typecheck`)。
 
 架构：host 半（cordis 插件）用 puppeteer-core 驱动本机 Chrome，注册 `chrome_*` 工具与 `/dsh-chrome/*` HTTP/WS API；client 半（浏览器 bundle）注册 `conversation.view` 的「Chrome」标签页，消费 API 与帧流。画面流 = Chrome 原生 screencast（活动页）+ 截图心跳（静止页兜底）。控制层借鉴 [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp)（CDP 控制、a11y 快照+uid 反查、等待机制、autoConnect 接管）与 [mcp-chrome](https://github.com/hangwin/mcp-chrome)（截图压缩、CDP 坐标输入、会话引用计数）的成熟设计。
 
